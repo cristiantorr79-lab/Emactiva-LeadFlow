@@ -1,0 +1,33 @@
+# Configuración privada; conservar ejemplos
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+# Node
+node_modules/
+dist/
+coverage/
+.npm/
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+# Editores y sistema
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+# Temporales, logs y artefactos locales
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
