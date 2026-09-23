@@ -12,7 +12,7 @@ El núcleo contiene reglas reutilizables; los adaptadores traducen contratos y e
 
 ## Estado actual
 
-LAB-LF-000: definición, alcance y arquitectura base. Existe diseño documental, migración SQL y validador; **todavía no existe workflow productivo n8n**, servicios mock ejecutables ni adaptadores implementados.
+LAB-LF-001 en curso. La infraestructura PostgreSQL local, migración y operación atómica de reclamo se incorporan en LF-001.B; **todavía no existe workflow productivo n8n**, servicios mock ejecutables ni adaptadores implementados.
 
 - [Arquitectura](docs/architecture/ARCHITECTURE.md)
 - [Contratos](docs/architecture/CONTRACTS.md)

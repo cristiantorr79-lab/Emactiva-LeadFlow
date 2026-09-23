@@ -18,6 +18,8 @@ Estados: `received`, `processing`, `duplicate`, `retrying`, `success`, `failed`.
 
 Transiciones: received → processing / duplicate / failed; processing → retrying / success / failed; retrying → processing / failed. success, duplicate y failed son terminales para la entrega automática. Una recuperación administrativa futura requiere diseño explícito.
 
+El reclamo persistente recibe execution_id, source, event_id, idempotency_key y lead_identifier. Devuelve claimed, la misma execution_id y original_execution_id (NULL si obtuvo propiedad). Valida que la clave corresponda exactamente a SHA-256 UTF-8 de `source:event_id`. Los duplicados conservan clave NULL y apuntan al propietario; la escritura directa de tablas no forma parte del contrato de aplicación.
+
 Stages: `validation`, `idempotency`, `crm_lookup`, `crm_create`, `crm_update`, `enrichment`, `crm_enrichment_update`, `alert`. Normalización pertenece a validation. Logging y respuesta son responsabilidades transversales, no stages adicionales. El resumen conserva la etapa principal al fallar; un evento independiente registra alert.
 
 crm_action: null, `created` o `updated`; crm_contact_id es string opaco. enrichment_status: `not_started`, `processing`, `success`, `failed`. retry_count inicia en cero y cuenta reintentos acumulados. Cada evento de auditoría tiene attempt_number local (primer intento = 1).

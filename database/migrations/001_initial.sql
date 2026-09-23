@@ -1,6 +1,14 @@
 -- Aplicación única mediante ledger transaccional; repetición deliberadamente rechazada.
 BEGIN;
 CREATE SCHEMA IF NOT EXISTS leadflow;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+\getenv app_user POSTGRES_APP_USER
+\getenv app_password POSTGRES_APP_PASSWORD
+SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_user')
+    THEN format('CREATE ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+    ELSE format('ALTER ROLE %I LOGIN PASSWORD %L', :'app_user', :'app_password')
+END \gexec
 CREATE TABLE IF NOT EXISTS leadflow.schema_migrations (
     version text PRIMARY KEY,
     applied_at timestamptz NOT NULL DEFAULT now()
@@ -53,4 +61,64 @@ CREATE TABLE leadflow.execution_events (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX execution_events_execution_idx ON leadflow.execution_events (execution_id, created_at);
+
+CREATE FUNCTION leadflow.compute_idempotency_key(p_source text, p_event_id text)
+RETURNS text LANGUAGE plpgsql IMMUTABLE STRICT AS $$
+BEGIN
+    IF p_source !~ '^[A-Za-z0-9_-]{1,100}$' OR length(p_event_id) NOT BETWEEN 1 AND 200 THEN
+        RAISE EXCEPTION 'invalid source or event_id' USING ERRCODE = '22023';
+    END IF;
+    RETURN encode(public.digest(convert_to(p_source || ':' || p_event_id, 'UTF8'), 'sha256'), 'hex');
+END;
+$$;
+
+CREATE FUNCTION leadflow.claim_event(
+    p_execution_id text, p_source text, p_event_id text,
+    p_idempotency_key text, p_lead_identifier text
+)
+RETURNS TABLE(claimed boolean, execution_id text, original_execution_id text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, leadflow AS $$
+DECLARE
+    v_owner_id text;
+BEGIN
+    IF p_idempotency_key <> leadflow.compute_idempotency_key(p_source, p_event_id) THEN
+        RAISE EXCEPTION 'idempotency key does not match source and event_id' USING ERRCODE = '22023';
+    END IF;
+
+    INSERT INTO leadflow.executions(execution_id, event_id, source, lead_identifier)
+    VALUES (p_execution_id, p_event_id, p_source, p_lead_identifier);
+    INSERT INTO leadflow.execution_events(execution_id, status, stage)
+    VALUES (p_execution_id, 'received', 'validation');
+
+    BEGIN
+        UPDATE leadflow.executions AS e
+        SET idempotency_key = p_idempotency_key, status = 'processing',
+            stage = 'idempotency', updated_at = clock_timestamp()
+        WHERE e.execution_id = p_execution_id;
+        INSERT INTO leadflow.execution_events(execution_id, status, stage)
+        VALUES (p_execution_id, 'processing', 'idempotency');
+        RETURN QUERY SELECT true, p_execution_id, NULL::text;
+        RETURN;
+    EXCEPTION WHEN unique_violation THEN
+        SELECT e.execution_id INTO STRICT v_owner_id
+        FROM leadflow.executions AS e
+        WHERE e.idempotency_key = p_idempotency_key;
+        UPDATE leadflow.executions AS e
+        SET status = 'duplicate', stage = 'idempotency', duplicate_of = v_owner_id,
+            finished_at = clock_timestamp(), updated_at = clock_timestamp()
+        WHERE e.execution_id = p_execution_id;
+        INSERT INTO leadflow.execution_events(execution_id, status, stage)
+        VALUES (p_execution_id, 'duplicate', 'idempotency');
+        RETURN QUERY SELECT false, p_execution_id, v_owner_id;
+    END;
+END;
+$$;
+
+REVOKE ALL ON SCHEMA leadflow FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA leadflow FROM PUBLIC;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA leadflow FROM PUBLIC;
+GRANT USAGE ON SCHEMA leadflow TO :"app_user";
+GRANT SELECT ON leadflow.executions, leadflow.execution_events TO :"app_user";
+GRANT EXECUTE ON FUNCTION leadflow.compute_idempotency_key(text, text) TO :"app_user";
+GRANT EXECUTE ON FUNCTION leadflow.claim_event(text, text, text, text, text) TO :"app_user";
 COMMIT;
