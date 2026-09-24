@@ -29,6 +29,8 @@ services:
       WEBHOOK_URL: http://localhost:${N8N_PORT:-5680}/
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY is required}
       LEADFLOW_WEBHOOK_KEY: ${LEADFLOW_WEBHOOK_KEY:?LEADFLOW_WEBHOOK_KEY is required}
+      CRM_BASE_URL: ${CRM_BASE_URL_N8N:-http://crm-mock:8080}
+      ENRICHMENT_BASE_URL: ${ENRICHMENT_BASE_URL_N8N:-http://enrichment-mock:8080}
       GENERIC_TIMEZONE: America/Santiago
       TZ: America/Santiago
       N8N_DIAGNOSTICS_ENABLED: "false"
@@ -50,12 +52,55 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      crm-mock:
+        condition: service_healthy
+      enrichment-mock:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5678/healthz || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 30
       start_period: 15s
+
+  crm-mock:
+    build:
+      context: ./mocks
+      dockerfile: Dockerfile
+    image: leadflow-mock:python-3.14.3
+    restart: unless-stopped
+    environment:
+      MOCK_KIND: crm
+      MOCK_PORT: 8080
+    ports:
+      - "127.0.0.1:${CRM_MOCK_PORT:-5683}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+  enrichment-mock:
+    build:
+      context: ./mocks
+      dockerfile: Dockerfile
+    image: leadflow-mock:python-3.14.3
+    restart: unless-stopped
+    environment:
+      MOCK_KIND: enrichment
+      MOCK_PORT: 8080
+      ENRICHMENT_INDUSTRY: ${ENRICHMENT_INDUSTRY:-software}
+      ENRICHMENT_COMPANY_SIZE: ${ENRICHMENT_COMPANY_SIZE:-small}
+      ENRICHMENT_WEBSITE: ${ENRICHMENT_WEBSITE:-https://example.test}
+    ports:
+      - "127.0.0.1:${ENRICHMENT_MOCK_PORT:-5682}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
 
 volumes:
   leadflow_postgres_data:

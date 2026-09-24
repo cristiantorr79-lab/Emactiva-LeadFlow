@@ -2,7 +2,7 @@
 
 ## Requisitos y estado
 
-LF-001.C usa Docker 29.6.1, Docker Compose 5.1.4, PostgreSQL 17.6 (`postgres:17.6-bookworm`), n8n 2.28.6 (`n8nio/n8n:2.28.6`) y Python 3.14.3. PostgreSQL se publica en `127.0.0.1:5432` y n8n en `127.0.0.1:5680`. El puerto 5678 pertenece a VetAtiende y no se modifica. Los mocks siguen fuera de esta etapa.
+LF-001.D1 usa Docker 29.6.1, Docker Compose 5.1.4, PostgreSQL 17.6 (`postgres:17.6-bookworm`), n8n 2.28.6 (`n8nio/n8n:2.28.6`) y Python 3.14.3. PostgreSQL se publica en `127.0.0.1:5432`, n8n en `127.0.0.1:5680`, CRM mock en `127.0.0.1:5683` y enrichment mock en `127.0.0.1:5682`. El puerto 5678 pertenece a VetAtiende y no se modifica.
 
 Desde la raíz del repositorio en PowerShell:
 
@@ -21,16 +21,25 @@ docker compose up -d postgres
 ./scripts/n8n/provision_n8n.ps1
 python scripts/test/test_persistence.py
 python scripts/test/test_n8n_core.py
+docker compose up -d --build --wait crm-mock enrichment-mock
+python scripts/test/test_mocks.py
+python scripts/test/test_n8n_mocks_integration.py
 python scripts/validation/validate_lab_lf_001.py
 git status --short
 git diff --check
 ```
 
-Compose carga `.env`, pero los scripts también requieren sus variables en la sesión. `provision_n8n.ps1` genera una credencial PostgreSQL cifrada en `.local/`, importa el workflow y lo publica mediante la CLI documentada de n8n. La carpeta `.local/` está ignorada. CRM, enrichment y Slack siguen vacíos.
+Compose carga `.env`, pero los scripts también requieren sus variables en la sesión. `provision_n8n.ps1` genera una credencial PostgreSQL cifrada en `.local/`, importa el workflow y lo publica mediante la CLI documentada de n8n. La carpeta `.local/` está ignorada. Los mocks CRM y enrichment son servicios HTTP locales en memoria, configurados por entorno y todavía no integrados al workflow n8n. Reiniciar sus contenedores reinicia sus datos. Slack sigue fuera de esta etapa.
+
+## Mocks LF-001.D1
+
+CRM expone `POST /crm/lookup`, `POST /crm/contacts`, `GET /crm/contacts/{contact_id}`, `PATCH /crm/contacts/{contact_id}` y `PATCH /crm/contacts/{contact_id}/enrichment`. Enrichment expone `POST /enrich`. Ambos incluyen `GET /healthz`. Las URL base de las pruebas se configuran con `CRM_BASE_URL` y `ENRICHMENT_BASE_URL`; los puertos publicados admiten `CRM_MOCK_PORT` y `ENRICHMENT_MOCK_PORT`. Los valores de enrichment se configuran mediante `ENRICHMENT_INDUSTRY`, `ENRICHMENT_COMPANY_SIZE` y `ENRICHMENT_WEBSITE`.
+
+`python scripts/test/test_mocks.py` ejecuta 12 comprobaciones HTTP reales: lookup, creación, idempotencia por `operation_key`, unicidad de email, updates parciales, enrichment y lista permitida de campos. `python scripts/test/test_n8n_mocks_integration.py` cubre el happy path integrado: creación, actualización, enrichment, persistencia success, duplicado sin nuevas llamadas y dos eventos para un único email. Las URL internas de n8n admiten `CRM_BASE_URL_N8N` y `ENRICHMENT_BASE_URL_N8N`. LF-001.D2 no añade simulación avanzada de errores, retries ni Slack.
 
 ## Migración
 
-`apply_migrations.ps1` detecta versiones aplicadas y envía únicamente migraciones pendientes por stdin con `ON_ERROR_STOP=1`. `001_initial` crea persistencia y reclamo; `002_n8n_core` añade `record_validation_failure`. El rol de aplicación conserva lectura y ejecución de funciones oficiales, sin DML directo.
+`apply_migrations.ps1` detecta versiones aplicadas y envía únicamente migraciones pendientes por stdin con `ON_ERROR_STOP=1`. `001_initial` crea persistencia y reclamo; `002_n8n_core` añade `record_validation_failure`; `003_n8n_happy_path` añade la operación oficial que persiste el resultado `success` después de CRM y enrichment. El rol de aplicación conserva lectura y ejecución de funciones oficiales, sin DML directo.
 
 No ejecutar con valores vacíos. La migración incorpora BEGIN/COMMIT y un ledger `leadflow.schema_migrations`. La inserción de versión ocurre antes del DDL de negocio; una repetición falla por PK y revierte la transacción, sin eliminar datos. Es **segura bajo este mecanismo, no un script de repetición silenciosa**. ON_ERROR_STOP y una conexión psql dedicada son obligatorios. No editar una migración aplicada ni marcar versiones manualmente.
 

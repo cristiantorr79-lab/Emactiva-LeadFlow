@@ -61,3 +61,89 @@ Archivos creados: `database/migrations/002_n8n_core.sql`, `workflows/leadflow_co
 n8n minimiza persistencia con `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none` y `EXECUTIONS_DATA_SAVE_ON_ERROR=none`. Credenciales y claves viven en `.env`/`.local`, ambos ignorados. No quedan hallazgos HIGH o CRITICAL dentro del alcance de LF-001.C.
 
 Siguiente etapa prevista: **LAB-LF-001.D — Implementación de mocks CRM y enrichment contra los contratos existentes**.
+
+## LF-001.D1 — Mocks CRM y enrichment, contratos básicos
+
+Resultado: **PASS** (2026-09-24). LAB-LF-001 continúa **EN CURSO**.
+
+Se implementaron dos servicios HTTP locales con Python **3.14.3-slim-bookworm**, sin dependencias externas. CRM mock se publica en `127.0.0.1:5683` y enrichment mock en `127.0.0.1:5682`; n8n LeadFlow permanece en 5680 y VetAtiende en 5678 sin cambios. Los servicios se ejecutan en memoria y reciben configuración únicamente por entorno.
+
+CRM implementa lookup por email, creación idempotente por `operation_key`, unicidad atómica de email, update parcial y actualización de enrichment sin borrar campos omitidos. Enrichment acepta email con company opcional y devuelve success con únicamente industry, company_size y website.
+
+Pruebas HTTP directas: **12/12 PASS**. Se cubrieron lookup inexistente/existente, CREATE, repetición idempotente, unicidad de email, updates parciales, updateEnrichment y las variantes válidas de enrichment. Los mocks todavía no están integrados al workflow n8n; no se añadieron retries, Slack ni simulaciones avanzadas de fallos.
+
+Archivos creados: `mocks/Dockerfile`, `mocks/server.py` y `scripts/test/test_mocks.py`. Modificados: `compose.yaml`, `docs/setup/SETUP.md` y este handoff.
+
+Siguiente etapa prevista: **LAB-LF-001.D2 — Integración controlada de los mocks con el workflow n8n**.
+
+## LF-001.D2 — Integración controlada de mocks con n8n
+
+Resultado: **PASS** (2026-09-24). LAB-LF-001 continúa **EN CURSO**.
+
+El owner del evento consulta CRM por email normalizado, crea o actualiza el contacto, solicita enrichment, aplica únicamente sus campos permitidos y cierra la ejecución como `success` mediante la función oficial `complete_execution_success`. El CREATE usa una `operation_key` estable derivada de la clave de idempotencia. El camino duplicate conserva la respuesta previa y no llama CRM ni enrichment.
+
+Pruebas de integración D2: **10/10 PASS**. Se verificaron lead nuevo con contacto creado y enriquecido, contacto existente actualizado sin borrar campos omitidos, dos eventos distintos con el mismo email y un único contacto, repetición del mismo evento sin llamadas externas, persistencia terminal success y respuesta pública sin PII ni secretos. Regresiones: núcleo n8n **26/26 PASS** y mocks **12/12 PASS**.
+
+Se añadió `003_n8n_happy_path.sql`, la prueba `test_n8n_mocks_integration.py`, configuración interna por entorno para URLs de mocks y contadores diagnósticos mínimos en los mocks. No se implementaron retries, Slack, recuperación de processing ni simulaciones de errores.
+
+Siguiente etapa prevista: **LAB-LF-001.D3 — Simulación y manejo controlado de errores de dependencias**.
+
+## LF-001.D3a — Simulación de errores en mocks
+
+Resultado: **PASS** (2026-09-24). LAB-LF-001 continúa **EN CURSO**.
+
+CRM y enrichment admiten simulación local determinista mediante `POST /control/failure` y limpieza mediante `DELETE /control/failure`. Los modos disponibles son timeout, HTTP 400, HTTP 401, HTTP 429 con `Retry-After` y HTTP 500; la configuración puede limitarse a una operación concreta. El mock no ejecuta retries y recupera inmediatamente el comportamiento normal al limpiar la simulación.
+
+Pruebas directas: **18/18 PASS**. Se conservaron las 12 comprobaciones del happy path y pasaron timeout, 400, 401, 429 con cabecera, 500 y recuperación posterior. No se modificó el workflow n8n ni se implementaron retries, Slack o manejo de errores en el orquestador.
+
+Archivos modificados en D3a: `mocks/server.py`, `scripts/test/test_mocks.py` y este handoff.
+
+Siguiente etapa prevista: **LAB-LF-001.D3b — Manejo de errores y retries en n8n**.
+
+## LF-001.D3b-1 — Errores y retries de enrichment en n8n
+
+Resultado: **PASS** (2026-09-24). LAB-LF-001 continúa **EN CURSO**.
+
+La llamada de enrichment clasifica HTTP 400 y 401 como fallos definitivos sin retry. Timeout, HTTP 429 y HTTP 500 se reintentan con un máximo de tres intentos totales; las esperas son 5 segundos y 15 segundos, y HTTP 429 usa el mayor valor entre el delay configurado y `Retry-After`. Solo se repite enrichment: el contacto CRM creado o actualizado se conserva y no se duplica.
+
+La función oficial `record_enrichment_outcome` persiste las transiciones `processing → retrying → processing`, el contador acumulado y el resultado terminal sin conceder DML directo a n8n. Un fallo definitivo deja la ejecución global en `failed`, conserva la referencia CRM y devuelve HTTP 502 con error sanitizado. `retry_count` queda en 0 sin retry, 1 tras una recuperación en el segundo intento y 2 al agotar tres intentos.
+
+Pruebas D3b-1: **9/9 PASS**. Se verificaron 400/401 sin retry, timeout/429/500 con retry, `Retry-After`, fallo temporal seguido de success, agotamiento en tres intentos, transiciones, contador, no duplicación CRM y respuesta pública sanitizada. Regresiones: happy path D2 **10/10 PASS** y mocks **18/18 PASS**.
+
+Archivos D3b-1: `database/migrations/004_enrichment_retries.sql`, `scripts/test/test_n8n_enrichment_retries.py`, `workflows/leadflow_core_initial.json`, `mocks/server.py` y este handoff.
+
+Siguiente etapa prevista: manejo de errores y retries de CRM. No iniciado.
+
+## LF-001.D3b-2 — Errores y retries de CRM
+
+Resultado: **PASS** (2026-09-24). LAB-LF-001 continúa **EN CURSO**.
+
+CRM clasifica HTTP 400, 401, 403 y 404 técnico como fallos definitivos sin retry. Timeout, error temporal de red y HTTP 408, 429, 500, 502, 503 y 504 se reintentan por operación con un máximo de tres intentos totales, delays de 5 y 15 segundos y respeto del mayor valor entre el delay y `Retry-After` para 429.
+
+CREATE trata HTTP 409 mediante lookup de reconciliación, sin retry ciego. Ante respuesta perdida o resultado ambiguo también ejecuta lookup antes de repetir CREATE; si el contacto existe, continúa con ese contacto. La clave de operación estable, la unicidad de email y la reconciliación evitaron contactos duplicados. `retry_count` queda en 0 sin retry, 1 tras recuperación en el segundo intento y 2 al agotar tres intentos.
+
+Suite CRM: **11/11 PASS**. Se verificaron lookup 400/401 sin retry, lookup 500 temporal, CREATE 500, reconciliación 409, CREATE ambiguo, update 500, agotamiento, contador, bloqueo de enrichment ante fallo CRM terminal, respuesta sanitizada y ausencia de duplicados. Regresiones: enrichment D3b-1 **9/9 PASS**, happy path D2 **10/10 PASS** y mocks **18/18 PASS**.
+
+Durante la validación dirigida se detectó que `Persist CRM Failure` persistía el fallo pero emitía cero items, por lo que la rama terminaba antes de `Respond CRM Failure` y el webhook devolvía un cuerpo vacío. Se corrigió con `alwaysOutputData: true`; la respuesta se construye desde `CRM Flow` y la normalización. Las pruebas dirigidas posteriores de CRM simple y retry 500 temporal terminaron con respuesta no vacía, `execution_id` y estado coherente.
+
+Validaciones finales: sintaxis Python/JSON PASS, `git diff --check` PASS, `git diff --cached --check` PASS y revisión de secretos PASS. No se implementaron Slack ni recuperación de ejecuciones en processing.
+
+Archivos D3b-2: `database/migrations/005_crm_retries.sql`, `scripts/test/test_n8n_crm_retries.py`, `workflows/leadflow_core_initial.json`, `mocks/server.py` y este handoff.
+
+## Cierre LAB-LF-001.D — CRM, enrichment y manejo de errores
+
+Resultado: **PASS** (2026-09-24). LAB-LF-001 continúa **EN CURSO**.
+
+- D1 — mocks CRM y enrichment: PASS.
+- D2 — integración happy path con n8n: PASS.
+- D3a — simulación determinista de errores: PASS.
+- D3b-1 — clasificación y retries de enrichment: PASS.
+- D3b-2 — clasificación, retries y reconciliación CRM: PASS.
+
+Regresión final: CRM **11/11 PASS**, enrichment **9/9 PASS**, integración happy path **10/10 PASS** y mocks **18/18 PASS**. Los retries se limitan a la operación fallida, con tres intentos totales, delays de 5 y 15 segundos y respeto de `Retry-After` para 429. HTTP deterministas no reintentables fallan de inmediato.
+
+CREATE ambiguo y HTTP 409 se reconcilian mediante lookup antes de cualquier repetición. La idempotencia de CREATE, la unicidad de email y las pruebas confirmaron ausencia de contactos duplicados. No quedan hallazgos abiertos dentro del alcance de la etapa D.
+
+Validaciones de cierre: sintaxis Python/JSON PASS, Docker Compose PASS, validador LF-001 PASS, `git diff --check` PASS, `git diff --cached --check` PASS y revisión de secretos PASS.
+
+Siguiente etapa prevista: integración de alerta Slack. No iniciada.

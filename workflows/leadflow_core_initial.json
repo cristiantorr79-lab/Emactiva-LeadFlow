@@ -2,31 +2,1130 @@
   "id": "leadflow-core-initial",
   "name": "LeadFlow Core Initial",
   "active": false,
-  "settings": {"executionOrder": "v1"},
+  "settings": {
+    "executionOrder": "v1"
+  },
   "nodes": [
-    {"id":"webhook","name":"LeadFlow Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[-900,0],"webhookId":"6ed09290-18f7-4d9c-b1bb-eadflow001c0","parameters":{"httpMethod":"POST","path":"leadflow","responseMode":"responseNode","options":{}}},
-    {"id":"prepare","name":"Authenticate Validate Normalize","type":"n8n-nodes-base.code","typeVersion":2,"position":[-680,0],"parameters":{"mode":"runOnceForEachItem","jsCode":"const crypto = require('crypto');\nconst headers = $json.headers || {};\nconst body = $json.body;\nconst executionId = 'lf_exec_' + crypto.randomUUID().replace(/-/g, '');\nconst expected = String($env.LEADFLOW_WEBHOOK_KEY || '');\nconst supplied = String(headers['x-leadflow-key'] || '');\nconst sameLength = expected.length > 0 && supplied.length === expected.length;\nconst authenticated = sameLength && crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));\nif (!authenticated) return { json: { route: 'auth_error', execution_id: executionId } };\nconst contentType = String(headers['content-type'] || '').toLowerCase();\nif (!contentType.startsWith('application/json')) return { json: { route: 'validation_error', execution_id: executionId, error_code: 'content_type' } };\nlet code = ''; let eventId = null; let source = null;\nif (!body || typeof body !== 'object' || Array.isArray(body)) code = 'invalid_json';\nelse {\n eventId = typeof body.event_id === 'string' ? body.event_id : null; source = typeof body.source === 'string' ? body.source : null;\n if (!Object.prototype.hasOwnProperty.call(body,'event_id') || !Object.prototype.hasOwnProperty.call(body,'source') || !Object.prototype.hasOwnProperty.call(body,'lead') || !body.lead || !Object.prototype.hasOwnProperty.call(body.lead,'email')) code='missing_field';\n else if (typeof body.event_id !== 'string' || typeof body.source !== 'string' || typeof body.lead !== 'object' || Array.isArray(body.lead) || typeof body.lead.email !== 'string') code='invalid_type';\n else if (body.event_id.length < 1 || body.event_id.length > 200 || body.event_id.trim() !== body.event_id) code='invalid_event_id';\n else if (body.source.length < 1 || body.source.length > 100 || !/^[A-Za-z0-9_-]+$/.test(body.source)) code='invalid_source';\n else {\n  const email=body.lead.email.trim().toLowerCase(); const parts=email.split('@'); const labels=parts.length===2 ? parts[1].split('.') : [];\n  if (email.length>254 || /\\s/.test(email) || parts.length!==2 || !parts[0] || labels.length<2 || labels.some(label=>!label)) code='invalid_email';\n  else {\n   for (const field of ['first_name','last_name','phone','company']) if (Object.prototype.hasOwnProperty.call(body.lead,field) && (typeof body.lead[field] !== 'string' || body.lead[field].length>200)) code='invalid_optional_field';\n   if (!code) { const sha=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex'); return {json:{route:'valid',execution_id:executionId,event_id:body.event_id,source:body.source,lead_identifier:sha(email),idempotency_key:sha(body.source+':'+body.event_id)}}; }\n  }\n }\n}\nreturn {json:{route:'validation_error',execution_id:executionId,event_id:eventId,source,error_code:code}};"}},
-    {"id":"auth-if","name":"Authentication Valid","type":"n8n-nodes-base.if","typeVersion":2.2,"position":[-460,0],"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":2},"conditions":[{"id":"auth-condition","leftValue":"={{ $json.route }}","rightValue":"auth_error","operator":{"type":"string","operation":"notEquals"}}],"combinator":"and"},"options":{}}},
-    {"id":"valid-if","name":"Payload Valid","type":"n8n-nodes-base.if","typeVersion":2.2,"position":[-240,-80],"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":2},"conditions":[{"id":"valid-condition","leftValue":"={{ $json.route }}","rightValue":"valid","operator":{"type":"string","operation":"equals"}}],"combinator":"and"},"options":{}}},
-    {"id":"claim","name":"Claim Event","type":"n8n-nodes-base.postgres","typeVersion":2.6,"position":[0,-180],"onError":"continueRegularOutput","parameters":{"operation":"executeQuery","query":"SELECT * FROM leadflow.claim_event($1, $2, $3, $4, $5);","options":{"queryBatching":"single","connectionTimeout":3,"queryReplacement":"={{ [$json.execution_id, $json.source, $json.event_id, $json.idempotency_key, $json.lead_identifier] }}"}},"credentials":{"postgres":{"id":"leadflow-postgres","name":"LeadFlow PostgreSQL"}}},
-    {"id":"record-invalid","name":"Record Validation Failure","type":"n8n-nodes-base.postgres","typeVersion":2.6,"position":[0,40],"onError":"continueRegularOutput","parameters":{"operation":"executeQuery","query":"SELECT * FROM leadflow.record_validation_failure($1, $2, $3, $4);","options":{"queryBatching":"single","connectionTimeout":3,"queryReplacement":"={{ [$json.execution_id, $json.event_id || null, $json.source || null, $json.error_code] }}"}},"credentials":{"postgres":{"id":"leadflow-postgres","name":"LeadFlow PostgreSQL"}}},
-    {"id":"claim-ok","name":"Claim Database Available","type":"n8n-nodes-base.if","typeVersion":2.2,"position":[220,-180],"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":2},"conditions":[{"id":"claim-ok-condition","leftValue":"={{ $json.error ? 'error' : 'ok' }}","rightValue":"ok","operator":{"type":"string","operation":"equals"}}],"combinator":"and"},"options":{}}},
-    {"id":"invalid-ok","name":"Validation Database Available","type":"n8n-nodes-base.if","typeVersion":2.2,"position":[220,40],"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":2},"conditions":[{"id":"invalid-ok-condition","leftValue":"={{ $json.error ? 'error' : 'ok' }}","rightValue":"ok","operator":{"type":"string","operation":"equals"}}],"combinator":"and"},"options":{}}},
-    {"id":"format-claim","name":"Format Claimed Response","type":"n8n-nodes-base.code","typeVersion":2,"position":[440,-240],"parameters":{"mode":"runOnceForEachItem","jsCode":"const claimed=$json.claimed===true||$json.claimed==='true'||$json.claimed==='t';\nreturn {json:claimed?{ok:true,execution_id:$json.execution_id,status:'processing',duplicate:false}:{ok:true,execution_id:$json.execution_id,status:'duplicate',duplicate:true,original_execution_id:$json.original_execution_id}};"}},
-    {"id":"respond-ok","name":"Respond Core Result","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.4,"position":[660,-240],"parameters":{"respondWith":"json","responseBody":"={{ $json }}","options":{"responseCode":200}}},
-    {"id":"respond-validation","name":"Respond Validation Error","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.4,"position":[440,0],"parameters":{"respondWith":"json","responseBody":"={{ { ok:false, execution_id:$json.execution_id, status:'failed', error:{type:'validation_error'} } }}","options":{"responseCode":400}}},
-    {"id":"respond-auth","name":"Respond Unauthorized","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.4,"position":[-240,180],"parameters":{"respondWith":"json","responseBody":"={{ { ok:false, status:'failed', error:{type:'authentication_error'} } }}","options":{"responseCode":401}}},
-    {"id":"respond-db","name":"Respond Database Unavailable","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.4,"position":[440,180],"parameters":{"respondWith":"json","responseBody":"={{ { ok:false, status:'failed', error:{type:'persistence_error'} } }}","options":{"responseCode":503}}}
+    {
+      "id": "webhook",
+      "name": "LeadFlow Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1100,
+        0
+      ],
+      "webhookId": "6ed09290-18f7-4d9c-b1bb-eadflow001c0",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "leadflow",
+        "responseMode": "responseNode",
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare",
+      "name": "Authenticate Validate Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto=require('crypto'); const headers=$json.headers||{}; const body=$json.body; const executionId='lf_exec_'+crypto.randomUUID().replace(/-/g,''); const expected=String($env.LEADFLOW_WEBHOOK_KEY||''); const supplied=String(headers['x-leadflow-key']||''); const authenticated=expected.length>0&&supplied.length===expected.length&&crypto.timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)); if(!authenticated)return{json:{route:'auth_error',execution_id:executionId}}; const contentType=String(headers['content-type']||'').toLowerCase(); if(!contentType.startsWith('application/json'))return{json:{route:'validation_error',execution_id:executionId,error_code:'content_type'}}; let code='',eventId=null,source=null; if(!body||typeof body!=='object'||Array.isArray(body))code='invalid_json'; else{eventId=typeof body.event_id==='string'?body.event_id:null; source=typeof body.source==='string'?body.source:null; if(!Object.prototype.hasOwnProperty.call(body,'event_id')||!Object.prototype.hasOwnProperty.call(body,'source')||!Object.prototype.hasOwnProperty.call(body,'lead')||!body.lead||!Object.prototype.hasOwnProperty.call(body.lead,'email'))code='missing_field'; else if(typeof body.event_id!=='string'||typeof body.source!=='string'||typeof body.lead!=='object'||Array.isArray(body.lead)||typeof body.lead.email!=='string')code='invalid_type'; else if(body.event_id.length<1||body.event_id.length>200||body.event_id.trim()!==body.event_id)code='invalid_event_id'; else if(body.source.length<1||body.source.length>100||!/^[A-Za-z0-9_-]+$/.test(body.source))code='invalid_source'; else{const email=body.lead.email.trim().toLowerCase(); const parts=email.split('@'); const labels=parts.length===2?parts[1].split('.'):[]; if(email.length>254||/\\s/.test(email)||parts.length!==2||!parts[0]||labels.length<2||labels.some(label=>!label))code='invalid_email'; else{for(const field of ['first_name','last_name','phone','company'])if(Object.prototype.hasOwnProperty.call(body.lead,field)&&(typeof body.lead[field]!=='string'||body.lead[field].length>200))code='invalid_optional_field'; if(!code){const sha=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex'); const lead={email},crm_fields={}; for(const field of ['first_name','last_name','phone','company'])if(body.lead[field]){lead[field]=body.lead[field];crm_fields[field]=body.lead[field];} return{json:{route:'valid',execution_id:executionId,event_id:body.event_id,source:body.source,lead_identifier:sha(email),idempotency_key:sha(body.source+':'+body.event_id),email,lead,crm_fields}};}}}} return{json:{route:'validation_error',execution_id:executionId,event_id:eventId,source,error_code:code}};"
+      }
+    },
+    {
+      "id": "auth-if",
+      "name": "Authentication Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -700,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "auth",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "auth_error",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "valid-if",
+      "name": "Payload Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -500,
+        -80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "valid",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "valid",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "claim",
+      "name": "Claim Event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -300,
+        -180
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.claim_event($1, $2, $3, $4, $5);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$json.execution_id, $json.source, $json.event_id, $json.idempotency_key, $json.lead_identifier] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "record-invalid",
+      "name": "Record Validation Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -300,
+        80
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_validation_failure($1, $2, $3, $4);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$json.execution_id, $json.event_id || null, $json.source || null, $json.error_code] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "claim-ok",
+      "name": "Claim Database Available",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        -180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "claim-ok",
+              "leftValue": "={{ $json.error ? 'error' : 'ok' }}",
+              "rightValue": "ok",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "invalid-ok",
+      "name": "Validation Database Available",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -100,
+        80
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "invalid-ok",
+              "leftValue": "={{ $json.error ? 'error' : 'ok' }}",
+              "rightValue": "ok",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "owner-if",
+      "name": "Event Claimed",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        100,
+        -240
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "owner",
+              "leftValue": "={{ $json.claimed === true || $json.claimed === 'true' || $json.claimed === 't' }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "format-duplicate",
+      "name": "Format Duplicate Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        -80
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {json:{ok:true,execution_id:$json.execution_id,status:'duplicate',duplicate:true,original_execution_id:$json.original_execution_id}};"
+      }
+    },
+    {
+      "id": "crm-lookup",
+      "name": "CRM Flow",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        -300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const email=$('Authenticate Validate Normalize').item.json.email,lead=$('Authenticate Validate Normalize').item.json.lead,fields=$('Authenticate Validate Normalize').item.json.crm_fields,operationKey=$('Authenticate Validate Normalize').item.json.idempotency_key+':crm_create',delays=[5,15]; let totalRetries=0; const call=async(method,path,body)=>{try{const r=await helpers.httpRequest({method,url:$env.CRM_BASE_URL+path,body,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true});return{status:Number(r.statusCode||200),headers:r.headers||{},body:r.body??r};}catch(e){return{status:Number(e.statusCode||e.response?.statusCode||0),headers:e.response?.headers||{},body:null};}}; const classify=s=>s===400?'validation_error':s===401?'authentication_error':s===403?'authorization_error':s===404?'technical_not_found':s===409?'conflict_error':s===429?'rate_limit':s===0?'timeout':'upstream_error'; const retryable=s=>s===0||[408,429,500,502,503,504].includes(s); const wait=async(r,a)=>{const ra=Number(r.headers['retry-after']||r.headers['Retry-After']||0),d=r.status===429?Math.max(delays[a-1],Number.isFinite(ra)?ra:0):delays[a-1];await new Promise(x=>setTimeout(x,d*1000));}; const lookup=async()=>{for(let a=1;a<=3;a++){const r=await call('POST','/crm/lookup',{email});if(r.status===200)return{ok:true,...r.body,retries:a-1};if(!retryable(r.status)||a===3)return{ok:false,stage:'crm_lookup',error_type:classify(r.status),error_code:r.status?'http_'+r.status:'timeout',retries:a-1};await wait(r,a);}}; const first=await lookup();totalRetries+=first.retries;if(!first.ok)return{json:{success:false,...first,retry_count:totalRetries}}; if(first.found){for(let a=1;a<=3;a++){const r=await call('PATCH','/crm/contacts/'+first.contact.id,{fields});if(r.status>=200&&r.status<300)return{json:{success:true,contact_id:first.contact.id,crm_action:'updated',retry_count:totalRetries+a-1}};if(!retryable(r.status)||a===3)return{json:{success:false,stage:'crm_update',contact_id:first.contact.id,crm_action:'updated',error_type:classify(r.status),error_code:r.status?'http_'+r.status:'timeout',retry_count:totalRetries+a-1}};await wait(r,a);}} for(let a=1;a<=3;a++){const r=await call('POST','/crm/contacts',{lead,operation_key:operationKey});if(r.status>=200&&r.status<300)return{json:{success:true,contact_id:r.body.contact_id,crm_action:'created',retry_count:totalRetries+a-1}};if(r.status===409||r.status===0){const q=await call('POST','/crm/lookup',{email});if(q.status===200&&q.body.found)return{json:{success:true,contact_id:q.body.contact.id,crm_action:'created',retry_count:totalRetries+a-1}};if(r.status===409)return{json:{success:false,stage:'crm_create',error_type:'conflict_error',error_code:'http_409',retry_count:totalRetries+a-1}};}if(!retryable(r.status)||a===3)return{json:{success:false,stage:'crm_create',error_type:classify(r.status),error_code:r.status?'http_'+r.status:'ambiguous_create',retry_count:totalRetries+a-1}};await wait(r,a);}"
+      }
+    },
+    {
+      "id": "crm-found",
+      "name": "CRM Contact Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        -300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "found",
+              "leftValue": "={{ $json.found }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "crm-create",
+      "name": "CRM Create",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        -200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts' }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({lead: $('Authenticate Validate Normalize').item.json.lead, operation_key: $('Authenticate Validate Normalize').item.json.idempotency_key + ':crm_create'}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "crm-update",
+      "name": "CRM Update",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        -400
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts/' + $json.contact.id }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({fields: $('Authenticate Validate Normalize').item.json.crm_fields}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "enrich-created",
+      "name": "Enrich Created Contact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -200
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const context={contact_id:$json.contact_id,crm_action:$json.crm_action,base_retry_count:Number($json.retry_count||0),email:$('Authenticate Validate Normalize').item.json.email,company:$('Authenticate Validate Normalize').item.json.lead.company}; const payload={email:context.email,...(context.company?{company:context.company}:{})}; const delays=[5,15]; let last={type:'upstream_error',code:'unknown'}; for(let attempt=1;attempt<=3;attempt++){ let status=0,headers={},body=null; try{const response=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_BASE_URL+'/enrich',body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); status=Number(response.statusCode||200); headers=response.headers||{}; body=response.body??response;}catch(error){status=Number(error.statusCode||error.response?.statusCode||0); headers=error.response?.headers||{};} if(status>=200&&status<300&&body?.enrichment_status==='success')return{json:{...context,success:true,data:body.data||{},retry_count:context.base_retry_count+attempt-1}}; const type=status===400?'validation_error':status===401?'authentication_error':status===429?'rate_limit':status===0?'timeout':'upstream_error'; last={type,code:status?'http_'+status:'timeout'}; const retryable=status===0||status===429||status>=500; if(!retryable||attempt===3)return{json:{...context,success:false,error_type:last.type,error_code:last.code,retry_count:context.base_retry_count+attempt-1}}; const retryAfter=Number(headers['retry-after']||headers['Retry-After']||0); const delay=status===429?Math.max(delays[attempt-1],Number.isFinite(retryAfter)?retryAfter:0):delays[attempt-1]; await new Promise(resolve=>setTimeout(resolve,delay*1000)); }"
+      }
+    },
+    {
+      "id": "enrich-updated",
+      "name": "Enrich Updated Contact",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -400
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const context={contact_id:$json.contact_id,crm_action:'updated',email:$('Authenticate Validate Normalize').item.json.email,company:$('Authenticate Validate Normalize').item.json.lead.company}; const payload={email:context.email,...(context.company?{company:context.company}:{})}; const delays=[5,15]; let last={type:'upstream_error',code:'unknown'}; for(let attempt=1;attempt<=3;attempt++){ let status=0,headers={},body=null; try{const response=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_BASE_URL+'/enrich',body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); status=Number(response.statusCode||200); headers=response.headers||{}; body=response.body??response;}catch(error){status=Number(error.statusCode||error.response?.statusCode||0); headers=error.response?.headers||{};} if(status>=200&&status<300&&body?.enrichment_status==='success')return{json:{...context,success:true,data:body.data||{},retry_count:attempt-1}}; const type=status===400?'validation_error':status===401?'authentication_error':status===429?'rate_limit':status===0?'timeout':'upstream_error'; last={type,code:status?'http_'+status:'timeout'}; const retryable=status===0||status===429||status>=500; if(!retryable||attempt===3)return{json:{...context,success:false,error_type:last.type,error_code:last.code,retry_count:attempt-1}}; const retryAfter=Number(headers['retry-after']||headers['Retry-After']||0); const delay=status===429?Math.max(delays[attempt-1],Number.isFinite(retryAfter)?retryAfter:0):delays[attempt-1]; await new Promise(resolve=>setTimeout(resolve,delay*1000)); }"
+      }
+    },
+    {
+      "id": "apply-created",
+      "name": "Apply Enrichment Created",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -200
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts/' + $json.contact_id + '/enrichment' }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({fields: $json.data}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "apply-updated",
+      "name": "Apply Enrichment Updated",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -400
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts/' + $json.contact_id + '/enrichment' }}",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({fields: $json.data}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "persist-created",
+      "name": "Persist Created Success",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1300,
+        -200
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_enrichment_outcome($1, $2, $3, $4, $5, $6, $7);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $('Enrich Created Contact').item.json.crm_action, $('Enrich Created Contact').item.json.contact_id, $('Enrich Created Contact').item.json.retry_count, true, null, null] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "persist-updated",
+      "name": "Persist Updated Success",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1300,
+        -400
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_enrichment_outcome($1, $2, $3, $4, $5, $6, $7);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $('Enrich Updated Contact').item.json.crm_action, $('Enrich Updated Contact').item.json.contact_id, $('Enrich Updated Contact').item.json.retry_count, true, null, null] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "format-success",
+      "name": "Format Success Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        -300
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {json:{ok:true,execution_id:$json.execution_id,status:'success',crm_action:$json.crm_action,duplicate:false}};"
+      }
+    },
+    {
+      "id": "respond-ok",
+      "name": "Respond Core Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1700,
+        -200
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "respond-validation",
+      "name": "Respond Validation Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        100,
+        60
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok:false, execution_id:$json.execution_id, status:'failed', error:{type:'validation_error'} } }}",
+        "options": {
+          "responseCode": 400
+        }
+      }
+    },
+    {
+      "id": "respond-auth",
+      "name": "Respond Unauthorized",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        -500,
+        180
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok:false, status:'failed', error:{type:'authentication_error'} } }}",
+        "options": {
+          "responseCode": 401
+        }
+      }
+    },
+    {
+      "id": "respond-db",
+      "name": "Respond Database Unavailable",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        100,
+        180
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok:false, status:'failed', error:{type:'persistence_error'} } }}",
+        "options": {
+          "responseCode": 503
+        }
+      }
+    },
+    {
+      "id": "enrich-created-ok",
+      "name": "Created Enrichment Succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1050,
+        -200
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "enrich-created-ok-condition",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "enrich-updated-ok",
+      "name": "Updated Enrichment Succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1050,
+        -400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "enrich-updated-ok-condition",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "persist-created-failure",
+      "name": "Persist Created Enrichment Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1250,
+        -80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_enrichment_outcome($1, $2, $3, $4, $5, $6, $7);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $json.crm_action, $json.contact_id, $json.retry_count, false, $json.error_type, $json.error_code] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "persist-updated-failure",
+      "name": "Persist Updated Enrichment Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1250,
+        -520
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_enrichment_outcome($1, $2, $3, $4, $5, $6, $7);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $json.crm_action, $json.contact_id, $json.retry_count, false, $json.error_type, $json.error_code] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "respond-enrichment-failure",
+      "name": "Respond Enrichment Failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1500,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok:false, execution_id:$json.execution_id, status:'failed', error:{type:$json.error_type} } }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "crm-flow-ok",
+      "name": "CRM Flow Succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        500,
+        -300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "crm-flow-ok-condition",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "persist-crm-failure",
+      "name": "Persist CRM Failure",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "position": [
+        700,
+        -80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_crm_failure($1,$2,$3,$4,$5,$6,$7);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id,$json.stage,$json.retry_count,$json.error_type,$json.error_code,$json.crm_action||null,$json.contact_id||null] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "respond-crm-failure",
+      "name": "Respond CRM Failure",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        900,
+        -80
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok:false, execution_id:$('Authenticate Validate Normalize').item.json.execution_id, status:'failed', error:{type:$('CRM Flow').item.json.error_type} } }}",
+        "options": {
+          "responseCode": 502
+        }
+      }
+    }
   ],
   "connections": {
-    "LeadFlow Webhook":{"main":[[{"node":"Authenticate Validate Normalize","type":"main","index":0}]]},
-    "Authenticate Validate Normalize":{"main":[[{"node":"Authentication Valid","type":"main","index":0}]]},
-    "Authentication Valid":{"main":[[{"node":"Payload Valid","type":"main","index":0}],[{"node":"Respond Unauthorized","type":"main","index":0}]]},
-    "Payload Valid":{"main":[[{"node":"Claim Event","type":"main","index":0}],[{"node":"Record Validation Failure","type":"main","index":0}]]},
-    "Claim Event":{"main":[[{"node":"Claim Database Available","type":"main","index":0}]]},
-    "Record Validation Failure":{"main":[[{"node":"Validation Database Available","type":"main","index":0}]]},
-    "Claim Database Available":{"main":[[{"node":"Format Claimed Response","type":"main","index":0}],[{"node":"Respond Database Unavailable","type":"main","index":0}]]},
-    "Validation Database Available":{"main":[[{"node":"Respond Validation Error","type":"main","index":0}],[{"node":"Respond Database Unavailable","type":"main","index":0}]]},
-    "Format Claimed Response":{"main":[[{"node":"Respond Core Result","type":"main","index":0}]]}
+    "LeadFlow Webhook": {
+      "main": [
+        [
+          {
+            "node": "Authenticate Validate Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authenticate Validate Normalize": {
+      "main": [
+        [
+          {
+            "node": "Authentication Valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Authentication Valid": {
+      "main": [
+        [
+          {
+            "node": "Payload Valid",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Unauthorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload Valid": {
+      "main": [
+        [
+          {
+            "node": "Claim Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Record Validation Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Event": {
+      "main": [
+        [
+          {
+            "node": "Claim Database Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Validation Failure": {
+      "main": [
+        [
+          {
+            "node": "Validation Database Available",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claim Database Available": {
+      "main": [
+        [
+          {
+            "node": "Event Claimed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Database Unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validation Database Available": {
+      "main": [
+        [
+          {
+            "node": "Respond Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond Database Unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Event Claimed": {
+      "main": [
+        [
+          {
+            "node": "CRM Flow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Duplicate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Contact Found": {
+      "main": [
+        [
+          {
+            "node": "CRM Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CRM Create",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Create": {
+      "main": [
+        [
+          {
+            "node": "Enrich Created Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Update": {
+      "main": [
+        [
+          {
+            "node": "Enrich Updated Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Created Contact": {
+      "main": [
+        [
+          {
+            "node": "Created Enrichment Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Updated Contact": {
+      "main": [
+        [
+          {
+            "node": "Updated Enrichment Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Enrichment Created": {
+      "main": [
+        [
+          {
+            "node": "Persist Created Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Enrichment Updated": {
+      "main": [
+        [
+          {
+            "node": "Persist Updated Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Created Success": {
+      "main": [
+        [
+          {
+            "node": "Format Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Updated Success": {
+      "main": [
+        [
+          {
+            "node": "Format Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Success Response": {
+      "main": [
+        [
+          {
+            "node": "Respond Core Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Duplicate Response": {
+      "main": [
+        [
+          {
+            "node": "Respond Core Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Created Enrichment Succeeded": {
+      "main": [
+        [
+          {
+            "node": "Apply Enrichment Created",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist Created Enrichment Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Updated Enrichment Succeeded": {
+      "main": [
+        [
+          {
+            "node": "Apply Enrichment Updated",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist Updated Enrichment Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Created Enrichment Failure": {
+      "main": [
+        [
+          {
+            "node": "Respond Enrichment Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist Updated Enrichment Failure": {
+      "main": [
+        [
+          {
+            "node": "Respond Enrichment Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Flow": {
+      "main": [
+        [
+          {
+            "node": "CRM Flow Succeeded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CRM Flow Succeeded": {
+      "main": [
+        [
+          {
+            "node": "Enrich Created Contact",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Persist CRM Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persist CRM Failure": {
+      "main": [
+        [
+          {
+            "node": "Respond CRM Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   }
 }

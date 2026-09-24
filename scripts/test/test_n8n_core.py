@@ -67,13 +67,13 @@ try:
     event = PREFIX + "_new"
     status, owner_body, owner_text = request(valid(event, first_name="Private", phone="+56900000000"))
     created_ids.append(owner_body.get("execution_id", ""))
-    check("N8N-001", status == 200 and owner_body.get("status") == "processing" and owner_body.get("duplicate") is False)
+    check("N8N-001", status == 200 and owner_body.get("status") == "success" and owner_body.get("duplicate") is False)
 
     owner_snapshot = psql(f"SELECT status||'|'||event_id||'|'||retry_count FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';")
     status, duplicate_body, duplicate_text = request(valid(event))
     created_ids.append(duplicate_body.get("execution_id", ""))
     check("N8N-002", status == 200 and duplicate_body.get("duplicate") is True)
-    check("N8N-003", psql(f"SELECT status FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';") == "processing")
+    check("N8N-003", psql(f"SELECT status FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';") == "success")
     check("N8N-004", psql(f"SELECT status FROM leadflow.executions WHERE execution_id='{duplicate_body['execution_id']}';") == "duplicate")
     check("N8N-005", psql(f"SELECT duplicate_of FROM leadflow.executions WHERE execution_id='{duplicate_body['execution_id']}';") == owner_body["execution_id"])
 
@@ -150,7 +150,7 @@ try:
     check("N8N-024", all(row[0] == 200 for row in simultaneous) and owners == 1 and duplicates == 1)
     check("N8N-025", owner_snapshot == psql(f"SELECT status||'|'||event_id||'|'||retry_count FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';"))
     concurrency_history = psql(f"SELECT count(*) FROM leadflow.execution_events ev JOIN leadflow.executions e USING(execution_id) WHERE e.event_id='{concurrent_event}';")
-    check("N8N-026", concurrency_history == "4")
+    check("N8N-026", concurrency_history == "5")
 finally:
     safe_ids = [value for value in created_ids if value.startswith("lf_exec_") and value.replace("lf_exec_", "").isalnum()]
     if safe_ids:
