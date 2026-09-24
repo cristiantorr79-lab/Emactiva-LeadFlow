@@ -43,6 +43,13 @@ Validación, HTTP 400:
 
 Otros fallos conservan la forma de error: HTTP 502 para dependencia definitiva y HTTP 503 para infraestructura local indisponible. No se copia ciegamente el HTTP del proveedor al cliente. Errores conceptuales: validation_error, authentication_error, authorization_error, technical_not_found, conflict_error, rate_limit, timeout, network_error, upstream_error, ambiguous_create, persistence_error e internal_error. Código y mensaje públicos, si se añaden, deben ser genéricos y sanitizados; sin stack traces ni secretos. El webhook síncrono futuro deberá dimensionar su timeout al presupuesto real de operaciones; no se presupone que 20 segundos cubran todo el flujo.
 
+Respuesta diagnóstica LF-001.C para un evento nuevo, HTTP 200:
+```json
+{"ok":true,"execution_id":"lf_exec_xxx","status":"processing","duplicate":false}
+```
+
+Esta respuesta confirma recepción y propiedad del evento, no success comercial. El webhook local devuelve HTTP 401 ante autenticación ausente/incorrecta, HTTP 400 para validación, HTTP 422 cuando n8n rechaza JSON sintácticamente inválido antes de ejecutar el workflow y HTTP 503 cuando no puede persistir. Ninguna respuesta incluye PII, hashes, claves, detalles SQL ni stack traces.
+
 ## CRM Adapter (sin implementar)
 
 - `lookupByEmail(normalized_email)` → `{found:false}` o `{found:true,contact:{id,email}}`; múltiples coincidencias son error de integridad.

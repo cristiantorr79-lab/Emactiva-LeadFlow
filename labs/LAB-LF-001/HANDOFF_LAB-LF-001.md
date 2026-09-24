@@ -42,4 +42,22 @@ H1: **RESUELTO Y PROBADO** sin DELETE. H2: **RESUELTO Y PROBADO** mediante opera
 
 Estado Git previsto al cierre: rama `main`, un único commit `feat(lab-lf-001): implementar persistencia base e idempotencia`, working tree limpio, sin push. El hash se registra en el reporte de cierre de la etapa.
 
-Siguiente etapa prevista: **LAB-LF-001.C — Integración inicial del núcleo n8n con la persistencia validada**, sin proveedores reales.
+## LF-001.C — Integración inicial del núcleo n8n
+
+Resultado: **PASS** (2026-09-23). LAB-LF-001 continúa **EN CURSO**.
+
+n8n queda fijado en **2.28.6** mediante Docker Compose, persistente y expuesto solo en `127.0.0.1:5680`. El puerto 5678 pertenece a VetAtiende y no fue modificado. El workflow versionado `workflows/leadflow_core_initial.json` se importa y publica de forma reproducible; endpoint `POST /webhook/leadflow`.
+
+El webhook exige `X-LeadFlow-Key` desde entorno, valida y normaliza el contrato, genera execution_id y hashes, y usa exclusivamente `claim_event` y `record_validation_failure`. NEW queda en processing y DUPLICATE conserva referencia al propietario. No existe success comercial, CRM, enrichment ni Slack.
+
+Pruebas HTTP reales N8N-001–N8N-026: **26/26 PASS**. La prueba concurrente produjo exactamente **1 owner + 1 duplicate** con historiales íntegros. Se detuvo solo el PostgreSQL de LeadFlow y el webhook respondió HTTP 503 sanitizado; posteriormente se restauró el servicio. Se verificaron auth, validación, normalización, hashes, privacidad y ausencia de payload completo en tablas LeadFlow.
+
+Regresión final: núcleo n8n **26/26 PASS**, persistencia LF-001.B **19/19 PASS**, validador LF-001 PASS, sintaxis Python PASS, Docker Compose PASS y revisiones Git/secretos PASS. El validador LF-000 queda como baseline histórico congelado y no aplica como gate después de añadir las variables n8n requeridas a `.env.example`.
+
+Regresión de aprovisionamiento: `/healthz` podía responder antes de que el workflow publicado estuviera activo, iniciando pruebas durante esa ventana. `provision_n8n.ps1` ahora espera además una respuesta HTTP 401 del webhook sin credencial, que confirma registro y activación antes de continuar. La verificación dirigida posterior devolvió NEW processing con execution_id y DUPLICATE con original_execution_id correcto.
+
+Archivos creados: `database/migrations/002_n8n_core.sql`, `workflows/leadflow_core_initial.json`, scripts de aprovisionamiento/readiness n8n y `scripts/test/test_n8n_core.py`. Modificados: `.env.example`, `.gitignore`, `compose.yaml`, runner de migraciones, README, arquitectura, contratos, setup, validador LF-001 y este handoff.
+
+n8n minimiza persistencia con `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none` y `EXECUTIONS_DATA_SAVE_ON_ERROR=none`. Credenciales y claves viven en `.env`/`.local`, ambos ignorados. No quedan hallazgos HIGH o CRITICAL dentro del alcance de LF-001.C.
+
+Siguiente etapa prevista: **LAB-LF-001.D — Implementación de mocks CRM y enrichment contra los contratos existentes**.

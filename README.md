@@ -12,7 +12,7 @@ El núcleo contiene reglas reutilizables; los adaptadores traducen contratos y e
 
 ## Estado actual
 
-LAB-LF-001 en curso. La infraestructura PostgreSQL local, migración y operación atómica de reclamo se incorporan en LF-001.B; **todavía no existe workflow productivo n8n**, servicios mock ejecutables ni adaptadores implementados.
+LAB-LF-001 en curso. LF-001.C incorpora un núcleo n8n local que autentica, valida, normaliza, reclama eventos en PostgreSQL y responde NEW/DUPLICATE. Es un workflow de desarrollo importable; **todavía no existe procesamiento comercial productivo**, CRM, enrichment ni Slack.
 
 - [Arquitectura](docs/architecture/ARCHITECTURE.md)
 - [Contratos](docs/architecture/CONTRACTS.md)

@@ -4,7 +4,9 @@
 
 n8n orquestará el webhook y el núcleo reutilizable: validar, normalizar, reclamar evento, gestionar estados, clasificar errores, aplicar retries, registrar y responder. PostgreSQL será autoridad para idempotencia y trazabilidad. Los adaptadores CRM, enriquecimiento y alerta Slack traducirán los contratos externos sin introducir reglas del proveedor en el núcleo. Configuración exclusivamente por entorno, según `.env.example`.
 
-En este LAB solo se define la arquitectura. Las carpetas `workflows/`, `mocks/`, `database/seeds/`, `scripts/test/` y `docs/handoff/` se crearán cuando tengan implementaciones o material propio. El handoff vive en `labs/` para evitar duplicarlo.
+LF-001.C ejecuta n8n 2.28.6 en Docker, persistente y publicado solo en loopback. El workflow `leadflow_core_initial.json` autentica `X-LeadFlow-Key`, valida sin propagar PII, calcula hashes y usa exclusivamente `claim_event` y `record_validation_failure` con el rol de aplicación. Un nuevo evento queda honestamente en processing; aún no hay success comercial.
+
+LF-001 ya incorpora `workflows/` y `scripts/test/` con contenido ejecutable. `mocks/`, `database/seeds/` y `docs/handoff/` siguen diferidos hasta que tengan contenido real; el handoff canónico permanece en `labs/`.
 
 ## Flujo normal
 
@@ -51,7 +53,9 @@ Resumen mínimo: execution_id, idempotency_key, event_id, source, lead_identifie
 
 lead_identifier será SHA-256 del email normalizado; reduce exposición pero sigue siendo dato seudonimizado. No guardar payloads completos, nombres, teléfono ni email en texto en logs. Permitir únicamente códigos y mensajes redactados; nunca cabeceras, tokens, URLs firmadas, webhook Slack o stack traces. Slack recibe solo execution_id, etapa y código sanitizado. Configurar retención y acceso restringido a logs al implementar infraestructura.
 
-Credenciales fuera de Git; `.env.example` sin valores sensibles. PostgreSQL con usuario de aplicación de mínimo privilegio y rol de migraciones separado. TLS y autenticación del webhook se definirán antes de exponer infraestructura; LAB-LF-000 no abre puertos ni utiliza secretos reales.
+Credenciales fuera de Git; `.env.example` sin valores sensibles. PostgreSQL con usuario de aplicación de mínimo privilegio y rol de migraciones separado. LF-001.C añade autenticación local por header configurable. TLS y la autenticación para exposición real deberán definirse antes de salir de loopback.
+
+El webhook local exige una clave de entorno y no se expone fuera de `127.0.0.1`. n8n guarda su configuración cifrada mediante N8N_ENCRYPTION_KEY. Las ejecuciones automáticas exitosas y fallidas no conservan datos de ejecución; esto minimiza la persistencia del payload recibido. El debugging local se apoya en respuestas sanitizadas, logs técnicos y las tablas LeadFlow, que no almacenan email, teléfono ni nombres.
 
 ## Extensibilidad
 

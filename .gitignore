@@ -28,6 +28,7 @@ $RECYCLE.BIN/
 logs/
 tmp/
 temp/
+.local/
 *.tmp
 *.bak
 *.swp
