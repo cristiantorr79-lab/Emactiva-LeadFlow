@@ -1,6 +1,6 @@
 # LAB-LF-001 — Implementación de infraestructura base y núcleo inicial
 
-Estado: **EN CURSO**
+Estado: **CERRADO — PASS**
 
 Fecha de apertura: **2026-09-23**
 
@@ -241,3 +241,55 @@ Regresiones de cierre: F1 **7/7 PASS**, F2a **9/9 PASS**, F2b-1 **7/7 PASS** y F
 Archivos acumulados F: migraciones `007`–`010`, scripts manuales de recovery, cuatro suites de pruebas, configuración segura de entorno, integración de almacenamiento cifrado en el workflow y este handoff.
 
 Siguiente etapa prevista: cierre final y validación integral de LAB-LF-001. No iniciada.
+
+## Cierre final LAB-LF-001 — Infraestructura base y núcleo inicial
+
+Estado: **CERRADO — PASS**.
+
+Fecha de cierre: **2026-09-25**.
+
+### Alcance completado
+
+- B: PostgreSQL, modelo de estados, idempotencia y concurrencia atómica.
+- C: webhook autenticado, validación, normalización y núcleo n8n 2.28.6.
+- D: mocks CRM/enrichment, happy path, retries, reconciliación 409/CREATE ambiguo y persistencia terminal.
+- E: alertas terminales sanitizadas con fallo aislado y sin recursión.
+- F: detección de `processing` interrumpido, lease exclusiva, reconciliación CRM, contexto mínimo cifrado, enrichment y cierre controlado.
+
+### Validación integral
+
+Resultado funcional consolidado: **133/133 PASS**.
+
+- Persistencia e idempotencia: 19/19.
+- Núcleo n8n: 26/26.
+- Mocks: 18/18.
+- Integración happy path: 10/10.
+- Enrichment retries: 9/9.
+- CRM retries y reconciliación: 11/11.
+- Alertas: 7/7.
+- Recovery F1: 7/7.
+- Recovery F2a: 9/9.
+- Recovery F2b-1: 7/7.
+- Recovery F2b-2: 10/10.
+
+Las migraciones `001`–`010` se aplicaron en orden sobre una base PostgreSQL temporal vacía y el ledger final quedó completo. Sintaxis de 16 archivos Python y workflow JSON PASS; Docker Compose PASS; validador LF-001 PASS; `git diff --check` y `git diff --cached --check` PASS; secretos e ignorados PASS. Todos los puertos publicados por este proyecto permanecen limitados a `127.0.0.1`.
+
+### Commits relevantes
+
+- `1e1c650` — persistencia base e idempotencia.
+- `965c776` — núcleo n8n con persistencia.
+- `32b7445` — CRM, enrichment y retries.
+- `e2f35f6` — alertas de fallo.
+- `890bb7a` — recuperación controlada.
+
+### Hallazgos y límites aceptados
+
+Los hallazgos iniciales H1 y H2 quedaron resueltos y probados. También se resolvieron la calificación de `public.digest`, la espera de publicación real del webhook y la rama CRM que persistía sin emitir respuesta. No quedan hallazgos funcionales abiertos.
+
+`ARCHITECTURE.md` y `CONTRACTS.md` conservan algunos rótulos históricos como “futuro” o “sin implementar” en secciones cuyo comportamiento ejecutable ya está validado; este HANDOFF registra el estado operativo final. Se acepta como deuda documental para la preparación del siguiente LAB, sin impacto funcional.
+
+CRM, enrichment y Slack reales no están conectados; las pruebas usan servicios locales deterministas. Recovery se ejecuta mediante scripts controlados y no tiene scheduler. El despliegue fuera de loopback, TLS, autenticación de producción, retención operativa y observabilidad quedan fuera del alcance de LAB-LF-001.
+
+### Siguiente LAB recomendado
+
+**LAB-LF-002 — Preparación de adaptadores reales, seguridad de despliegue y operación controlada**, comenzando por actualizar la documentación arquitectónica al estado ejecutable y definir gates antes de conectar servicios externos. No iniciado.
