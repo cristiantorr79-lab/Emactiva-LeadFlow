@@ -4,6 +4,8 @@
 
 LF-001.D1 usa Docker 29.6.1, Docker Compose 5.1.4, PostgreSQL 17.6 (`postgres:17.6-bookworm`), n8n 2.28.6 (`n8nio/n8n:2.28.6`) y Python 3.14.3. PostgreSQL se publica en `127.0.0.1:5432`, n8n en `127.0.0.1:5680`, CRM mock en `127.0.0.1:5683` y enrichment mock en `127.0.0.1:5682`. El puerto 5678 pertenece a VetAtiende y no se modifica.
 
+LF-002.1 añade el servicio interno de adaptadores, publicado para pruebas en `127.0.0.1:5685`. `RETRY_MAX_ATTEMPTS` admite 1–3; ambos delays y `ADAPTER_HTTP_TIMEOUT_MS` deben ser positivos. Los defaults locales conservan 3 intentos, 5/15 segundos y 2000 ms. `ADAPTER_CALL_TIMEOUT_MS` limita la llamada Core→adaptador. `CRM_API_KEY` y `ENRICHMENT_API_KEY` permanecen como placeholders: no se envían hasta seleccionar proveedor y esquema de autenticación.
+
 Desde la raíz del repositorio en PowerShell:
 
 ```powershell
@@ -22,6 +24,8 @@ docker compose up -d postgres
 python scripts/test/test_persistence.py
 python scripts/test/test_n8n_core.py
 docker compose up -d --build --wait crm-mock enrichment-mock
+docker compose up -d --build --wait adapters
+python scripts/test/test_adapters.py
 python scripts/test/test_mocks.py
 python scripts/test/test_n8n_mocks_integration.py
 python scripts/validation/validate_lab_lf_001.py

@@ -4,6 +4,8 @@
 
 n8n orquestará el webhook y el núcleo reutilizable: validar, normalizar, reclamar evento, gestionar estados, clasificar errores, aplicar retries, registrar y responder. PostgreSQL será autoridad para idempotencia y trazabilidad. Los adaptadores CRM, enriquecimiento y alerta Slack traducirán los contratos externos sin introducir reglas del proveedor en el núcleo. Configuración exclusivamente por entorno, según `.env.example`.
 
+LF-002.1 materializa esa frontera mediante el servicio interno `adapters`: el Core consume contratos estables `/crm/process`, `/enrichment/enrich`, actualización de enrichment y `/alert`; solo el adaptador conoce los endpoints y formatos HTTP de los mocks. Retries, delays y timeout del proveedor se configuran por entorno y se validan al iniciar. Las API keys se reciben en la frontera pero no se envían hasta definir el esquema de autenticación del proveedor real.
+
 LF-001.C ejecuta n8n 2.28.6 en Docker, persistente y publicado solo en loopback. El workflow `leadflow_core_initial.json` autentica `X-LeadFlow-Key`, valida sin propagar PII, calcula hashes y usa exclusivamente `claim_event` y `record_validation_failure` con el rol de aplicación. Un nuevo evento queda honestamente en processing; aún no hay success comercial.
 
 LF-001 ya incorpora `workflows/` y `scripts/test/` con contenido ejecutable. `mocks/`, `database/seeds/` y `docs/handoff/` siguen diferidos hasta que tengan contenido real; el handoff canónico permanece en `labs/`.

@@ -280,79 +280,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const email=$('Authenticate Validate Normalize').item.json.email,lead=$('Authenticate Validate Normalize').item.json.lead,fields=$('Authenticate Validate Normalize').item.json.crm_fields,operationKey=$('Authenticate Validate Normalize').item.json.idempotency_key+':crm_create',delays=[5,15]; let totalRetries=0; const call=async(method,path,body)=>{try{const r=await helpers.httpRequest({method,url:$env.CRM_BASE_URL+path,body,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true});return{status:Number(r.statusCode||200),headers:r.headers||{},body:r.body??r};}catch(e){return{status:Number(e.statusCode||e.response?.statusCode||0),headers:e.response?.headers||{},body:null};}}; const classify=s=>s===400?'validation_error':s===401?'authentication_error':s===403?'authorization_error':s===404?'technical_not_found':s===409?'conflict_error':s===429?'rate_limit':s===0?'timeout':'upstream_error'; const retryable=s=>s===0||[408,429,500,502,503,504].includes(s); const wait=async(r,a)=>{const ra=Number(r.headers['retry-after']||r.headers['Retry-After']||0),d=r.status===429?Math.max(delays[a-1],Number.isFinite(ra)?ra:0):delays[a-1];await new Promise(x=>setTimeout(x,d*1000));}; const lookup=async()=>{for(let a=1;a<=3;a++){const r=await call('POST','/crm/lookup',{email});if(r.status===200)return{ok:true,...r.body,retries:a-1};if(!retryable(r.status)||a===3)return{ok:false,stage:'crm_lookup',error_type:classify(r.status),error_code:r.status?'http_'+r.status:'timeout',retries:a-1};await wait(r,a);}}; const first=await lookup();totalRetries+=first.retries;if(!first.ok)return{json:{success:false,...first,retry_count:totalRetries}}; if(first.found){for(let a=1;a<=3;a++){const r=await call('PATCH','/crm/contacts/'+first.contact.id,{fields});if(r.status>=200&&r.status<300)return{json:{success:true,contact_id:first.contact.id,crm_action:'updated',retry_count:totalRetries+a-1}};if(!retryable(r.status)||a===3)return{json:{success:false,stage:'crm_update',contact_id:first.contact.id,crm_action:'updated',error_type:classify(r.status),error_code:r.status?'http_'+r.status:'timeout',retry_count:totalRetries+a-1}};await wait(r,a);}} for(let a=1;a<=3;a++){const r=await call('POST','/crm/contacts',{lead,operation_key:operationKey});if(r.status>=200&&r.status<300)return{json:{success:true,contact_id:r.body.contact_id,crm_action:'created',retry_count:totalRetries+a-1}};if(r.status===409||r.status===0){const q=await call('POST','/crm/lookup',{email});if(q.status===200&&q.body.found)return{json:{success:true,contact_id:q.body.contact.id,crm_action:'created',retry_count:totalRetries+a-1}};if(r.status===409)return{json:{success:false,stage:'crm_create',error_type:'conflict_error',error_code:'http_409',retry_count:totalRetries+a-1}};}if(!retryable(r.status)||a===3)return{json:{success:false,stage:'crm_create',error_type:classify(r.status),error_code:r.status?'http_'+r.status:'ambiguous_create',retry_count:totalRetries+a-1}};await wait(r,a);}"
-      }
-    },
-    {
-      "id": "crm-found",
-      "name": "CRM Contact Found",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [
-        500,
-        -300
-      ],
-      "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 2
-          },
-          "conditions": [
-            {
-              "id": "found",
-              "leftValue": "={{ $json.found }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
-        "options": {}
-      }
-    },
-    {
-      "id": "crm-create",
-      "name": "CRM Create",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        700,
-        -200
-      ],
-      "parameters": {
-        "method": "POST",
-        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts' }}",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({lead: $('Authenticate Validate Normalize').item.json.lead, operation_key: $('Authenticate Validate Normalize').item.json.idempotency_key + ':crm_create'}) }}",
-        "options": {}
-      }
-    },
-    {
-      "id": "crm-update",
-      "name": "CRM Update",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        700,
-        -400
-      ],
-      "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts/' + $json.contact.id }}",
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({fields: $('Authenticate Validate Normalize').item.json.crm_fields}) }}",
-        "options": {}
+        "jsCode": "const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.CRM_ADAPTER_URL+'/crm/process',body:{email:source.email,lead:source.lead,present_fields:source.crm_fields,operation_key:source.idempotency_key+':crm_create'},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:result};}catch(error){return {json:{success:false,stage:'crm_lookup',error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:0}};}"
       }
     },
     {
@@ -366,7 +294,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const context={contact_id:$json.contact_id,crm_action:$json.crm_action,base_retry_count:Number($json.retry_count||0),email:$('Authenticate Validate Normalize').item.json.email,company:$('Authenticate Validate Normalize').item.json.lead.company}; const payload={email:context.email,...(context.company?{company:context.company}:{})}; const delays=[5,15]; let last={type:'upstream_error',code:'unknown'}; for(let attempt=1;attempt<=3;attempt++){ let status=0,headers={},body=null; try{const response=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_BASE_URL+'/enrich',body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); status=Number(response.statusCode||200); headers=response.headers||{}; body=response.body??response;}catch(error){status=Number(error.statusCode||error.response?.statusCode||0); headers=error.response?.headers||{};} if(status>=200&&status<300&&body?.enrichment_status==='success')return{json:{...context,success:true,data:body.data||{},retry_count:context.base_retry_count+attempt-1}}; const type=status===400?'validation_error':status===401?'authentication_error':status===429?'rate_limit':status===0?'timeout':'upstream_error'; last={type,code:status?'http_'+status:'timeout'}; const retryable=status===0||status===429||status>=500; if(!retryable||attempt===3)return{json:{...context,success:false,error_type:last.type,error_code:last.code,retry_count:context.base_retry_count+attempt-1}}; const retryAfter=Number(headers['retry-after']||headers['Retry-After']||0); const delay=status===429?Math.max(delays[attempt-1],Number.isFinite(retryAfter)?retryAfter:0):delays[attempt-1]; await new Promise(resolve=>setTimeout(resolve,delay*1000)); }"
+        "jsCode": "const context={contact_id:$json.contact_id,crm_action:$json.crm_action,base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
       }
     },
     {
@@ -380,7 +308,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const context={contact_id:$json.contact_id,crm_action:'updated',email:$('Authenticate Validate Normalize').item.json.email,company:$('Authenticate Validate Normalize').item.json.lead.company}; const payload={email:context.email,...(context.company?{company:context.company}:{})}; const delays=[5,15]; let last={type:'upstream_error',code:'unknown'}; for(let attempt=1;attempt<=3;attempt++){ let status=0,headers={},body=null; try{const response=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_BASE_URL+'/enrich',body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); status=Number(response.statusCode||200); headers=response.headers||{}; body=response.body??response;}catch(error){status=Number(error.statusCode||error.response?.statusCode||0); headers=error.response?.headers||{};} if(status>=200&&status<300&&body?.enrichment_status==='success')return{json:{...context,success:true,data:body.data||{},retry_count:attempt-1}}; const type=status===400?'validation_error':status===401?'authentication_error':status===429?'rate_limit':status===0?'timeout':'upstream_error'; last={type,code:status?'http_'+status:'timeout'}; const retryable=status===0||status===429||status>=500; if(!retryable||attempt===3)return{json:{...context,success:false,error_type:last.type,error_code:last.code,retry_count:attempt-1}}; const retryAfter=Number(headers['retry-after']||headers['Retry-After']||0); const delay=status===429?Math.max(delays[attempt-1],Number.isFinite(retryAfter)?retryAfter:0):delays[attempt-1]; await new Promise(resolve=>setTimeout(resolve,delay*1000)); }"
+        "jsCode": "const context={contact_id:$json.contact_id,crm_action:'updated',base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
       }
     },
     {
@@ -394,7 +322,7 @@
       ],
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts/' + $json.contact_id + '/enrichment' }}",
+        "url": "={{ $env.CRM_ADAPTER_URL + '/crm/update-enrichment/' + $json.contact_id }}",
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
@@ -413,7 +341,7 @@
       ],
       "parameters": {
         "method": "PATCH",
-        "url": "={{ $env.CRM_BASE_URL + '/crm/contacts/' + $json.contact_id + '/enrichment' }}",
+        "url": "={{ $env.CRM_ADAPTER_URL + '/crm/update-enrichment/' + $json.contact_id }}",
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
@@ -777,7 +705,7 @@
         -80
       ],
       "parameters": {
-        "jsCode": "const main=$('CRM Flow').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; let delivered=false,error_code=null; try{const r=await helpers.httpRequest({method:'POST',url:$env.SLACK_WEBHOOK_URL,body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(r.statusCode||200); delivered=status>=200&&status<300; if(!delivered)error_code='slack_delivery_failed';}catch(e){error_code='slack_delivery_failed';} return {json:{execution_id,delivered,alert_error_code:error_code}};"
+        "jsCode": "const main=$('CRM Flow').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
       }
     },
     {
@@ -816,7 +744,7 @@
         20
       ],
       "parameters": {
-        "jsCode": "const main=$('Enrich Created Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; let delivered=false,error_code=null; try{const r=await helpers.httpRequest({method:'POST',url:$env.SLACK_WEBHOOK_URL,body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(r.statusCode||200); delivered=status>=200&&status<300; if(!delivered)error_code='slack_delivery_failed';}catch(e){error_code='slack_delivery_failed';} return {json:{execution_id,delivered,alert_error_code:error_code}};"
+        "jsCode": "const main=$('Enrich Created Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
       }
     },
     {
@@ -855,7 +783,7 @@
         -520
       ],
       "parameters": {
-        "jsCode": "const main=$('Enrich Updated Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; let delivered=false,error_code=null; try{const r=await helpers.httpRequest({method:'POST',url:$env.SLACK_WEBHOOK_URL,body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(r.statusCode||200); delivered=status>=200&&status<300; if(!delivered)error_code='slack_delivery_failed';}catch(e){error_code='slack_delivery_failed';} return {json:{execution_id,delivered,alert_error_code:error_code}};"
+        "jsCode": "const main=$('Enrich Updated Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
       }
     },
     {
@@ -1039,46 +967,6 @@
         [
           {
             "node": "Format Duplicate Response",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "CRM Contact Found": {
-      "main": [
-        [
-          {
-            "node": "CRM Update",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "CRM Create",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "CRM Create": {
-      "main": [
-        [
-          {
-            "node": "Enrich Created Contact",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "CRM Update": {
-      "main": [
-        [
-          {
-            "node": "Enrich Updated Contact",
             "type": "main",
             "index": 0
           }

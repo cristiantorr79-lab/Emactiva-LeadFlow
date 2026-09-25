@@ -30,9 +30,10 @@ services:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY is required}
       LEADFLOW_WEBHOOK_KEY: ${LEADFLOW_WEBHOOK_KEY:?LEADFLOW_WEBHOOK_KEY is required}
       RECOVERY_CONTEXT_KEY: ${RECOVERY_CONTEXT_KEY:?RECOVERY_CONTEXT_KEY is required}
-      CRM_BASE_URL: ${CRM_BASE_URL_N8N:-http://crm-mock:8080}
-      ENRICHMENT_BASE_URL: ${ENRICHMENT_BASE_URL_N8N:-http://enrichment-mock:8080}
-      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-http://slack-mock:8080/webhook}
+      CRM_ADAPTER_URL: http://adapters:8080
+      ENRICHMENT_ADAPTER_URL: http://adapters:8080
+      ALERT_ADAPTER_URL: http://adapters:8080
+      ADAPTER_CALL_TIMEOUT_MS: ${ADAPTER_CALL_TIMEOUT_MS:-30000}
       GENERIC_TIMEZONE: America/Santiago
       TZ: America/Santiago
       N8N_DIAGNOSTICS_ENABLED: "false"
@@ -59,6 +60,8 @@ services:
       enrichment-mock:
         condition: service_healthy
       slack-mock:
+        condition: service_healthy
+      adapters:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5678/healthz || exit 1"]
@@ -117,6 +120,39 @@ services:
       MOCK_PORT: 8080
     ports:
       - "127.0.0.1:${SLACK_MOCK_PORT:-5684}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+  adapters:
+    build:
+      context: ./adapters
+      dockerfile: Dockerfile
+    image: leadflow-adapters:python-3.14.3
+    restart: unless-stopped
+    environment:
+      ADAPTER_PORT: 8080
+      CRM_UPSTREAM_URL: ${CRM_BASE_URL_N8N:-http://crm-mock:8080}
+      ENRICHMENT_UPSTREAM_URL: ${ENRICHMENT_BASE_URL_N8N:-http://enrichment-mock:8080}
+      ALERT_UPSTREAM_URL: ${SLACK_WEBHOOK_URL:-http://slack-mock:8080/webhook}
+      CRM_API_KEY: ${CRM_API_KEY:-}
+      ENRICHMENT_API_KEY: ${ENRICHMENT_API_KEY:-}
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
+      RETRY_DELAY_FIRST_SECONDS: ${RETRY_DELAY_FIRST_SECONDS:-5}
+      RETRY_DELAY_SECOND_SECONDS: ${RETRY_DELAY_SECOND_SECONDS:-15}
+      ADAPTER_HTTP_TIMEOUT_MS: ${ADAPTER_HTTP_TIMEOUT_MS:-2000}
+    ports:
+      - "127.0.0.1:${ADAPTER_PORT:-5685}:8080"
+    depends_on:
+      crm-mock:
+        condition: service_healthy
+      enrichment-mock:
+        condition: service_healthy
+      slack-mock:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
       interval: 3s
