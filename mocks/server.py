@@ -18,6 +18,7 @@ contacts_by_operation = {}
 next_contact = 1
 lock = threading.Lock()
 calls = {"lookup": 0, "create": 0, "update": 0, "update_enrichment": 0, "enrich": 0}
+alerts = []
 failure = None
 FAILURE_MODES = {"timeout", "http_400", "http_401", "http_403", "http_404", "http_408", "http_409", "http_429", "http_500", "http_502", "http_503", "http_504", "ambiguous_create"}
 
@@ -63,6 +64,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/stats":
             with lock:
                 result = {"calls": dict(calls), "contacts": len(contacts) if KIND == "crm" else None}
+                if KIND == "slack":
+                    result.update({"alert_count": len(alerts), "last_alert": dict(alerts[-1]) if alerts else None})
             self.respond(200, result)
         elif KIND == "crm" and (match := re.fullmatch(r"/crm/contacts/([^/]+)", path)):
             with lock:
@@ -83,6 +86,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/control/failure":
             self.configure_failure(payload)
+        elif KIND == "slack" and path == "/webhook":
+            with lock:
+                calls["alert"] = calls.get("alert", 0) + 1
+            if not self.simulate("alert"):
+                self.slack_alert(payload)
         elif KIND == "crm" and path == "/crm/lookup" and not self.simulate("lookup"):
             self.crm_lookup(payload)
         elif KIND == "crm" and path == "/crm/contacts" and not self.simulate("create", payload):
@@ -108,7 +116,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         global failure
-        if urlparse(self.path).path != "/control/failure":
+        path = urlparse(self.path).path
+        if KIND == "slack" and path == "/alerts":
+            with lock:
+                alerts.clear()
+                calls["alert"] = 0
+            self.respond(200, {"ok": True})
+            return
+        if path != "/control/failure":
             self.respond(404, {"error": {"type": "technical_not_found"}})
             return
         with lock:
@@ -122,7 +137,8 @@ class Handler(BaseHTTPRequestHandler):
         delay = payload.get("delay_seconds", 1)
         retry_after = payload.get("retry_after_seconds", 3)
         failures = payload.get("failures")
-        allowed = {"*", "lookup", "create", "update", "update_enrichment"} if KIND == "crm" else {"*", "enrich"}
+        allowed = ({"*", "lookup", "create", "update", "update_enrichment"} if KIND == "crm"
+                   else {"*", "enrich"} if KIND == "enrichment" else {"*", "alert"})
         if mode not in FAILURE_MODES or operation not in allowed or not isinstance(delay, (int, float)) or delay <= 0 or not isinstance(retry_after, int) or retry_after < 0 or (failures is not None and (not isinstance(failures, int) or failures < 1)):
             self.respond(400, {"error": {"type": "validation_error"}})
             return
@@ -243,6 +259,16 @@ class Handler(BaseHTTPRequestHandler):
             "website": os.environ.get("ENRICHMENT_WEBSITE", "https://example.test"),
         }
         self.respond(200, {"enrichment_status": "success", "data": data})
+
+    def slack_alert(self, payload):
+        allowed = {"execution_id", "stage", "error_code"}
+        if set(payload) != allowed or not all(isinstance(payload[name], str) and payload[name] for name in allowed):
+            self.respond(400, {"error": {"type": "validation_error"}})
+            return
+        minimal = {name: payload[name] for name in ("execution_id", "stage", "error_code")}
+        with lock:
+            alerts.append(minimal)
+        self.respond(200, {"ok": True})
 
 
 ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

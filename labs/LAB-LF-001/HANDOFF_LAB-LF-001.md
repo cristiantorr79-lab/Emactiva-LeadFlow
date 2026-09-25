@@ -147,3 +147,29 @@ CREATE ambiguo y HTTP 409 se reconcilian mediante lookup antes de cualquier repe
 Validaciones de cierre: sintaxis Python/JSON PASS, Docker Compose PASS, validador LF-001 PASS, `git diff --check` PASS, `git diff --cached --check` PASS y revisión de secretos PASS.
 
 Siguiente etapa prevista: integración de alerta Slack. No iniciada.
+
+## LF-001.E1 — Alerta de fallo definitivo con receptor local
+
+Resultado: **PASS** (2026-09-24). LAB-LF-001 continúa **EN CURSO**.
+
+Se añadió un receptor Slack local en el servicio de mocks, publicado solo en `127.0.0.1:5684`. Recibe `POST /webhook`, conserva únicamente `execution_id`, `stage` y `error_code`, expone contador y última alerta mediante `GET /stats`, y permite limpiar el estado con `DELETE /alerts`. n8n obtiene la URL desde `SLACK_WEBHOOK_URL`, cuyo valor local predeterminado apunta a `http://slack-mock:8080/webhook`.
+
+Las rutas de fallo definitivo de CRM y enrichment persisten primero el fallo principal y después intentan una alerta. La función oficial `record_alert_result` registra el resultado como evento de etapa `alert` sin cambiar el estado terminal ni reemplazar el error principal. Una caída del receptor produce `slack_delivery_failed`, mantiene la ejecución en `failed` y no genera alertas recursivas.
+
+Pruebas E1: **7/7 PASS**. Se verificaron alerta única por fallo CRM, alerta única por fallo enrichment, payload sin PII ni secretos, ausencia de alertas en success y duplicate, preservación del error principal cuando falla Slack y ausencia de recursión. Regresiones mínimas: CRM **11/11 PASS**, enrichment **9/9 PASS** y mocks **18/18 PASS**.
+
+Archivos E1: `database/migrations/006_alert_events.sql`, `scripts/test/test_n8n_alerts.py`, `mocks/server.py`, `compose.yaml`, `workflows/leadflow_core_initial.json` y este handoff. No se conectó Slack real ni se implementó recuperación de ejecuciones en processing.
+
+Siguiente etapa prevista: **LAB-LF-001.E2**. No iniciada.
+
+## Cierre LAB-LF-001.E — Alertas de fallo definitivo
+
+Resultado: **PASS** (2026-09-25). LAB-LF-001 continúa **EN CURSO**.
+
+E1 finalizó con **7/7 PASS**. El receptor Slack local se utilizó únicamente para pruebas; `SLACK_WEBHOOK_URL` permite sustituirlo por un webhook Slack real mediante configuración, sin modificar el workflow. No se conectó ningún servicio Slack real.
+
+La alerta contiene exclusivamente `execution_id`, `stage` y `error_code`. El fallo de Slack conserva el estado `failed` y el error principal, registra un evento separado de etapa `alert` y no genera alertas recursivas.
+
+Validaciones de cierre: validador LF-001 PASS, sintaxis Python/JSON PASS, Docker Compose PASS, `git diff --check` PASS, `git diff --cached --check` PASS y revisión de secretos PASS.
+
+Siguiente etapa prevista: recuperación controlada de ejecuciones en `processing`. No iniciada.

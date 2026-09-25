@@ -31,6 +31,7 @@ services:
       LEADFLOW_WEBHOOK_KEY: ${LEADFLOW_WEBHOOK_KEY:?LEADFLOW_WEBHOOK_KEY is required}
       CRM_BASE_URL: ${CRM_BASE_URL_N8N:-http://crm-mock:8080}
       ENRICHMENT_BASE_URL: ${ENRICHMENT_BASE_URL_N8N:-http://enrichment-mock:8080}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-http://slack-mock:8080/webhook}
       GENERIC_TIMEZONE: America/Santiago
       TZ: America/Santiago
       N8N_DIAGNOSTICS_ENABLED: "false"
@@ -55,6 +56,8 @@ services:
       crm-mock:
         condition: service_healthy
       enrichment-mock:
+        condition: service_healthy
+      slack-mock:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:5678/healthz || exit 1"]
@@ -95,6 +98,24 @@ services:
       ENRICHMENT_WEBSITE: ${ENRICHMENT_WEBSITE:-https://example.test}
     ports:
       - "127.0.0.1:${ENRICHMENT_MOCK_PORT:-5682}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+  slack-mock:
+    build:
+      context: ./mocks
+      dockerfile: Dockerfile
+    image: leadflow-mock:python-3.14.3
+    restart: unless-stopped
+    environment:
+      MOCK_KIND: slack
+      MOCK_PORT: 8080
+    ports:
+      - "127.0.0.1:${SLACK_MOCK_PORT:-5684}:8080"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"]
       interval: 3s

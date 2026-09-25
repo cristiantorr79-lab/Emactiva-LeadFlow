@@ -644,7 +644,8 @@
           "id": "leadflow-postgres",
           "name": "LeadFlow PostgreSQL"
         }
-      }
+      },
+      "alwaysOutputData": true
     },
     {
       "id": "persist-updated-failure",
@@ -669,7 +670,8 @@
           "id": "leadflow-postgres",
           "name": "LeadFlow PostgreSQL"
         }
-      }
+      },
+      "alwaysOutputData": true
     },
     {
       "id": "respond-enrichment-failure",
@@ -677,7 +679,7 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.4,
       "position": [
-        1500,
+        1850,
         -80
       ],
       "parameters": {
@@ -754,7 +756,7 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.4,
       "position": [
-        900,
+        1300,
         -80
       ],
       "parameters": {
@@ -762,6 +764,123 @@
         "responseBody": "={{ { ok:false, execution_id:$('Authenticate Validate Normalize').item.json.execution_id, status:'failed', error:{type:$('CRM Flow').item.json.error_type} } }}",
         "options": {
           "responseCode": 502
+        }
+      }
+    },
+    {
+      "id": "alert-crm-failure",
+      "name": "Alert CRM Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        -80
+      ],
+      "parameters": {
+        "jsCode": "const main=$('CRM Flow').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; let delivered=false,error_code=null; try{const r=await helpers.httpRequest({method:'POST',url:$env.SLACK_WEBHOOK_URL,body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(r.statusCode||200); delivered=status>=200&&status<300; if(!delivered)error_code='slack_delivery_failed';}catch(e){error_code='slack_delivery_failed';} return {json:{execution_id,delivered,alert_error_code:error_code}};"
+      }
+    },
+    {
+      "id": "record-crm-alert",
+      "name": "Record CRM Alert Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "position": [
+        1100,
+        -80
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_alert_result($1,$2,$3);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$json.execution_id,$json.delivered,$json.alert_error_code||null] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "alert-created-enrichment-failure",
+      "name": "Alert Created Enrichment Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        20
+      ],
+      "parameters": {
+        "jsCode": "const main=$('Enrich Created Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; let delivered=false,error_code=null; try{const r=await helpers.httpRequest({method:'POST',url:$env.SLACK_WEBHOOK_URL,body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(r.statusCode||200); delivered=status>=200&&status<300; if(!delivered)error_code='slack_delivery_failed';}catch(e){error_code='slack_delivery_failed';} return {json:{execution_id,delivered,alert_error_code:error_code}};"
+      }
+    },
+    {
+      "id": "record-created-alert",
+      "name": "Record Created Alert Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "position": [
+        1650,
+        20
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_alert_result($1,$2,$3);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$json.execution_id,$json.delivered,$json.alert_error_code||null] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
+    },
+    {
+      "id": "alert-updated-enrichment-failure",
+      "name": "Alert Updated Enrichment Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        -520
+      ],
+      "parameters": {
+        "jsCode": "const main=$('Enrich Updated Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; let delivered=false,error_code=null; try{const r=await helpers.httpRequest({method:'POST',url:$env.SLACK_WEBHOOK_URL,body:payload,json:true,timeout:2000,returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(r.statusCode||200); delivered=status>=200&&status<300; if(!delivered)error_code='slack_delivery_failed';}catch(e){error_code='slack_delivery_failed';} return {json:{execution_id,delivered,alert_error_code:error_code}};"
+      }
+    },
+    {
+      "id": "record-updated-alert",
+      "name": "Record Updated Alert Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "alwaysOutputData": true,
+      "position": [
+        1650,
+        -520
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leadflow.record_alert_result($1,$2,$3);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$json.execution_id,$json.delivered,$json.alert_error_code||null] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
         }
       }
     }
@@ -1069,7 +1188,7 @@
       "main": [
         [
           {
-            "node": "Respond Enrichment Failure",
+            "node": "Alert Created Enrichment Failure",
             "type": "main",
             "index": 0
           }
@@ -1080,7 +1199,7 @@
       "main": [
         [
           {
-            "node": "Respond Enrichment Failure",
+            "node": "Alert Updated Enrichment Failure",
             "type": "main",
             "index": 0
           }
@@ -1120,7 +1239,73 @@
       "main": [
         [
           {
+            "node": "Alert CRM Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert CRM Failure": {
+      "main": [
+        [
+          {
+            "node": "Record CRM Alert Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record CRM Alert Result": {
+      "main": [
+        [
+          {
             "node": "Respond CRM Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Created Enrichment Failure": {
+      "main": [
+        [
+          {
+            "node": "Record Created Alert Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Created Alert Result": {
+      "main": [
+        [
+          {
+            "node": "Respond Enrichment Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Updated Enrichment Failure": {
+      "main": [
+        [
+          {
+            "node": "Record Updated Alert Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Updated Alert Result": {
+      "main": [
+        [
+          {
+            "node": "Respond Enrichment Failure",
             "type": "main",
             "index": 0
           }
