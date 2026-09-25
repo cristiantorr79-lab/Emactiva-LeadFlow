@@ -883,6 +883,31 @@
           "name": "LeadFlow PostgreSQL"
         }
       }
+    },
+    {
+      "id": "store-recovery-context",
+      "name": "Store Recovery Context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        250,
+        -300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT leadflow.store_recovery_context($1,$2,$3);",
+        "options": {
+          "queryBatching": "single",
+          "connectionTimeout": 3,
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id,$('Authenticate Validate Normalize').item.json.email,$env.RECOVERY_CONTEXT_KEY] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "leadflow-postgres",
+          "name": "LeadFlow PostgreSQL"
+        }
+      }
     }
   ],
   "connections": {
@@ -1006,7 +1031,7 @@
       "main": [
         [
           {
-            "node": "CRM Flow",
+            "node": "Store Recovery Context",
             "type": "main",
             "index": 0
           }
@@ -1306,6 +1331,17 @@
         [
           {
             "node": "Respond Enrichment Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Recovery Context": {
+      "main": [
+        [
+          {
+            "node": "CRM Flow",
             "type": "main",
             "index": 0
           }

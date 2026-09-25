@@ -173,3 +173,71 @@ La alerta contiene exclusivamente `execution_id`, `stage` y `error_code`. El fal
 Validaciones de cierre: validador LF-001 PASS, sintaxis Python/JSON PASS, Docker Compose PASS, `git diff --check` PASS, `git diff --cached --check` PASS y revisión de secretos PASS.
 
 Siguiente etapa prevista: recuperación controlada de ejecuciones en `processing`. No iniciada.
+
+## LF-001.F1 — Detección de ejecuciones processing interrumpidas
+
+Resultado: **PASS** (2026-09-25). LAB-LF-001 continúa **EN CURSO**.
+
+La operación oficial `leadflow.claim_stale_processing_executions` identifica únicamente ejecuciones con estado `processing`, `idempotency_key` presente y `updated_at` anterior a un umbral configurable entre 60 segundos y 7 días. La operación no cambia el estado, no libera ni elimina la clave de idempotencia y no reanuda CRM, enrichment o alertas.
+
+El claim usa una lease configurable de 30 a 3600 segundos y selección transaccional con `FOR UPDATE SKIP LOCKED`. Dos recuperadores concurrentes no pueden obtener simultáneamente la misma ejecución. La fila conserva etapa, referencias CRM y contador de retries para una reconciliación futura; una ejecución antigua no se considera segura para reejecución ciega.
+
+Pruebas F1: **7/7 PASS**. Se verificaron exclusión de processing reciente, detección de processing antiguo, exclusión de success/failed/duplicate, conservación de `idempotency_key`, propiedad concurrente única, ausencia de llamadas CRM/enrichment y permanencia de las claves. No se implementó reanudación, worker ni scheduler.
+
+Archivos F1: `database/migrations/007_recovery_candidates.sql`, `scripts/test/test_recovery_candidates.py` y este handoff.
+
+Siguiente etapa prevista: **LAB-LF-001.F2 — recuperación controlada con reconciliación previa**. No iniciada.
+
+## LF-001.F2a — Reconciliación CRM de ejecuciones interrumpidas
+
+Resultado: **PASS** (2026-09-25). LAB-LF-001 continúa **EN CURSO**.
+
+Una ejecución `processing` con lease vigente puede obtener contexto mediante `get_recovery_crm_context` y persistir el resultado mediante `record_recovery_crm_reconciliation`; el rol de aplicación conserva solo EXECUTE y no recibe DML directo. La reconciliación valida que el email controlado corresponda al `lead_identifier`, consulta CRM por email antes de cualquier CREATE y usa la misma `operation_key` estable `idempotency_key + ':crm_create'`.
+
+Si lookup encuentra el contacto, se reutiliza y persiste su `crm_contact_id`. Si no existe, CREATE solo se emite con la clave idempotente; ante timeout o respuesta ambigua se repite lookup antes de decidir. La ejecución permanece en `processing`, mantiene `idempotency_key`, `retry_count` y lease, y registra un evento `recovery_reused` o `recovery_created`. No se ejecuta enrichment ni se cierra success.
+
+Pruebas F2a: **9/9 PASS**. Se verificaron reutilización de contacto existente, CREATE seguro, reconciliación de resultado ambiguo, repetición con la misma operation_key sin duplicados, exclusión concurrente, reclaim tras lease vencida, claves intactas, ausencia de enrichment y auditoría. Regresión F1: **7/7 PASS**.
+
+El email normalizado no se persiste para recovery; el reconciliador lo recibe como entrada controlada y verifica su hash. La fuente durable de esa entrada deberá resolverse antes de automatizar F2b, sin debilitar la política de PII.
+
+Archivos F2a: `database/migrations/008_recovery_crm_reconciliation.sql`, `scripts/recovery/reconcile_crm.py`, `scripts/test/test_recovery_crm_reconciliation.py` y este handoff. F1 permanece sin commit.
+
+Siguiente etapa prevista: F2b, continuación controlada desde el contacto CRM reconciliado. No iniciada.
+
+## LF-001.F2b-1 — Contexto durable seguro para recovery
+
+Resultado: **PASS** (2026-09-25). LAB-LF-001 continúa **EN CURSO**.
+
+El email normalizado necesario para recovery se guarda únicamente como ciphertext PGP simétrico con AES-256 en `leadflow.recovery_contexts`. La tabla contiene solo `execution_id`, `email_ciphertext` y `created_at`; no almacena payload, nombre, teléfono ni clave. `RECOVERY_CONTEXT_KEY` proviene del entorno, queda vacío en `.env.example` y su valor real permanece únicamente en `.env` ignorado.
+
+El workflow persiste el contexto cifrado después del claim y antes del primer efecto CRM mediante `store_recovery_context`. El rol de aplicación no tiene SELECT ni DML sobre la tabla sensible. `get_recovery_crm_context` descifra únicamente para el worker que mantiene una lease vigente, verifica SHA-256 contra `lead_identifier` y no incluye el email en eventos, logs ni respuestas del reconciliador.
+
+Un trigger elimina el contexto sensible cuando la ejecución cambia a `success`, `failed` o `duplicate`; la FK también aplica borrado en cascada si se elimina la ejecución. Una clave incorrecta no devuelve el email ni detalles del fallo de descifrado.
+
+Pruebas F2b-1: **7/7 PASS**. Se verificaron ciphertext sin email plano, recuperación con secreto correcto, no exposición con secreto incorrecto, coincidencia del hash, denegación de lectura directa al rol de aplicación, limpieza terminal y esquema mínimo. Regresión F2a: **9/9 PASS**.
+
+Archivos F2b-1: `database/migrations/009_recovery_encrypted_context.sql`, `.env.example`, `compose.yaml`, `workflows/leadflow_core_initial.json`, `scripts/recovery/reconcile_crm.py`, `scripts/test/test_recovery_encrypted_context.py`, ajuste de la prueba F2a y este handoff. F1+F2a permanecen sin commit.
+
+Siguiente etapa prevista: continuación controlada con enrichment desde el contacto CRM reconciliado. No iniciada.
+
+## LF-001.F2b-2 — Continuación y cierre de recovery
+
+Resultado: **PASS** (2026-09-25). LAB-LF-001 continúa **EN CURSO**.
+
+Una ejecución reclamada y reconciliada usa exclusivamente el email descifrado por `get_recovery_crm_context` y el `crm_contact_id` ya persistido. Recovery ejecuta enrichment con la política vigente: HTTP 400/401 sin retry; timeout, 429 y 5xx con hasta tres intentos totales, delays de 5 y 15 segundos y respeto de `Retry-After`. Después aplica únicamente los campos permitidos al contacto reconciliado, sin ejecutar CREATE CRM.
+
+`complete_recovery_enrichment` exige estado `processing`, contacto CRM y lease vigente. En success cierra la ejecución, conserva la clave de idempotencia, invalida la lease y dispara la eliminación del contexto cifrado. En fallo definitivo persiste primero el error principal, limpia contexto y lease, envía la alerta sanitizada existente y registra su resultado sin reemplazar el fallo principal.
+
+Pruebas F2b-2: **10/10 PASS**. Se verificaron success con contacto existente y creado/reconciliado, retry temporal seguido de success, fallo terminal con alerta, ausencia de CREATE adicional y duplicados CRM, limpieza del contexto, conservación de `idempotency_key`, invalidación de lease y rechazo de una segunda recuperación terminal.
+
+## Cierre LAB-LF-001.F — Recuperación controlada
+
+Resultado: **PASS** (2026-09-25). LAB-LF-001 continúa **EN CURSO**.
+
+Recovery cubre detección de ejecuciones `processing` antiguas, lease con exclusión concurrente, reconciliación CRM previa, contexto mínimo cifrado, continuación de enrichment con retries y cierre terminal success/failed. No existe scheduler y ninguna recuperación repite CREATE ciegamente.
+
+Regresiones de cierre: F1 **7/7 PASS**, F2a **9/9 PASS**, F2b-1 **7/7 PASS** y F2b-2 **10/10 PASS**. No quedan hallazgos abiertos dentro del alcance de recovery.
+
+Archivos acumulados F: migraciones `007`–`010`, scripts manuales de recovery, cuatro suites de pruebas, configuración segura de entorno, integración de almacenamiento cifrado en el workflow y este handoff.
+
+Siguiente etapa prevista: cierre final y validación integral de LAB-LF-001. No iniciada.
