@@ -1,0 +1,41 @@
+services:
+  postgres:
+    ports: !reset []
+
+  n8n:
+    environment:
+      APP_ENV: production
+      N8N_HOST: ${PUBLIC_WEBHOOK_HOST:?PUBLIC_WEBHOOK_HOST is required}
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://${PUBLIC_WEBHOOK_HOST:?PUBLIC_WEBHOOK_HOST is required}/
+    ports: !reset []
+    depends_on: !reset
+      postgres:
+        condition: service_healthy
+      adapters:
+        condition: service_healthy
+
+  adapters:
+    environment:
+      APP_ENV: production
+      CRM_PROVIDER: ${CRM_PROVIDER:?CRM_PROVIDER is required}
+      ENRICHMENT_PROVIDER: ${ENRICHMENT_PROVIDER:?ENRICHMENT_PROVIDER is required}
+      CRM_UPSTREAM_URL: ${CRM_UPSTREAM_URL:?CRM_UPSTREAM_URL is required}
+      ENRICHMENT_UPSTREAM_URL: ${ENRICHMENT_UPSTREAM_URL:?ENRICHMENT_UPSTREAM_URL is required}
+      ALERT_UPSTREAM_URL: ${SLACK_WEBHOOK_URL:?SLACK_WEBHOOK_URL is required}
+      CRM_API_KEY: ${CRM_API_KEY:?CRM_API_KEY is required for HubSpot}
+      ENRICHMENT_API_KEY: ${ENRICHMENT_API_KEY:?ENRICHMENT_API_KEY is required for Hunter}
+    ports: !reset []
+    depends_on: !reset {}
+
+  crm-mock:
+    profiles: [development]
+    ports: !reset []
+
+  enrichment-mock:
+    profiles: [development]
+    ports: !reset []
+
+  slack-mock:
+    profiles: [development]
+    ports: !reset []

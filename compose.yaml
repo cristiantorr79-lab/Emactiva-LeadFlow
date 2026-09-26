@@ -23,6 +23,7 @@ services:
     image: n8nio/n8n:2.28.6
     restart: unless-stopped
     environment:
+      APP_ENV: ${APP_ENV:-development}
       N8N_HOST: localhost
       N8N_PORT: 5678
       N8N_PROTOCOL: http
@@ -134,6 +135,9 @@ services:
     image: leadflow-adapters:python-3.14.3
     restart: unless-stopped
     environment:
+      APP_ENV: ${APP_ENV:-development}
+      CRM_PROVIDER: ${CRM_PROVIDER:-mock}
+      ENRICHMENT_PROVIDER: ${ENRICHMENT_PROVIDER:-mock}
       ADAPTER_PORT: 8080
       CRM_UPSTREAM_URL: ${CRM_BASE_URL_N8N:-http://crm-mock:8080}
       ENRICHMENT_UPSTREAM_URL: ${ENRICHMENT_BASE_URL_N8N:-http://enrichment-mock:8080}
@@ -144,6 +148,10 @@ services:
       RETRY_DELAY_FIRST_SECONDS: ${RETRY_DELAY_FIRST_SECONDS:-5}
       RETRY_DELAY_SECOND_SECONDS: ${RETRY_DELAY_SECOND_SECONDS:-15}
       ADAPTER_HTTP_TIMEOUT_MS: ${ADAPTER_HTTP_TIMEOUT_MS:-2000}
+      CRM_CAP_CONSISTENT_LOOKUP_AFTER_CREATE: ${CRM_CAP_CONSISTENT_LOOKUP_AFTER_CREATE:-true}
+      CRM_CAP_UNIQUE_EMAIL: ${CRM_CAP_UNIQUE_EMAIL:-true}
+      CRM_CAP_IDEMPOTENT_CREATE_OPERATION_KEY: ${CRM_CAP_IDEMPOTENT_CREATE_OPERATION_KEY:-true}
+      CRM_CAP_CONFLICT_RECONCILIATION: ${CRM_CAP_CONFLICT_RECONCILIATION:-true}
     ports:
       - "127.0.0.1:${ADAPTER_PORT:-5685}:8080"
     depends_on:

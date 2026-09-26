@@ -7,7 +7,7 @@ import hashlib,json,os,secrets,subprocess,sys
 ROOT=Path(__file__).resolve().parents[2]; sys.path.insert(0,str(ROOT/'scripts'/'recovery'))
 from reconcile_crm import reconcile
 DB=os.environ['POSTGRES_DB']; APP=os.environ['POSTGRES_USER']; PASSWORD=os.environ['POSTGRES_PASSWORD']
-CRM=os.environ.get('CRM_BASE_URL') or 'http://127.0.0.1:5683'; ENRICH=os.environ.get('ENRICHMENT_BASE_URL') or 'http://127.0.0.1:5682'
+CRM=os.environ['CRM_BASE_URL']; ENRICH=os.environ['ENRICHMENT_BASE_URL']; ADAPTER=os.environ['RECOVERY_ADAPTER_URL']
 prefix='reconcile_'+secrets.token_hex(5); created=[]; checks={}
 
 def psql(sql,app=False):
@@ -30,19 +30,19 @@ def stats(): return http('/stats')
 try:
  enrich_before=json.load(urlopen(ENRICH+'/stats',timeout=3))['calls']
  email=f'{prefix}-existing@example.com'; seeded=http('/crm/contacts',{'lead':{'email':email},'operation_key':prefix+':seed'},'POST')['contact_id']
- execution,idem=fixture('existing',email,lease_worker='worker_existing'); result=reconcile(execution,'worker_existing',CRM)
+ execution,idem=fixture('existing',email,lease_worker='worker_existing'); result=reconcile(execution,'worker_existing',ADAPTER)
  check('RECOVERY-CRM-existing-reused',result['contact_id']==seeded and result['resolution']=='reused')
- email2=f'{prefix}-safe@example.com'; execution2,idem2=fixture('safe',email2,lease_worker='worker_safe'); before=stats()['contacts']; result2=reconcile(execution2,'worker_safe',CRM); after=stats()['contacts']
+ email2=f'{prefix}-safe@example.com'; execution2,idem2=fixture('safe',email2,lease_worker='worker_safe'); before=stats()['contacts']; result2=reconcile(execution2,'worker_safe',ADAPTER); after=stats()['contacts']
  check('RECOVERY-CRM-safe-create',result2['resolution']=='created' and after==before+1)
  email3=f'{prefix}-ambiguous@example.com'; execution3,idem3=fixture('ambiguous',email3,'crm_create',lease_worker='worker_ambiguous')
- http('/control/failure',{'mode':'ambiguous_create','operation':'create','failures':1,'delay_seconds':3},'POST'); result3=reconcile(execution3,'worker_ambiguous',CRM); http('/control/failure',method='DELETE')
- before_repeat=stats()['contacts']; psql(f"UPDATE leadflow.executions SET recovery_owner='worker_repeat',recovery_lease_until=clock_timestamp()+interval '5 minutes' WHERE execution_id='{execution3}';"); repeated=reconcile(execution3,'worker_repeat',CRM)
+ http('/control/failure',{'mode':'ambiguous_create','operation':'create','failures':1,'delay_seconds':3},'POST'); result3=reconcile(execution3,'worker_ambiguous',ADAPTER); http('/control/failure',method='DELETE')
+ before_repeat=stats()['contacts']; psql(f"UPDATE leadflow.executions SET recovery_owner='worker_repeat',recovery_lease_until=clock_timestamp()+interval '5 minutes' WHERE execution_id='{execution3}';"); repeated=reconcile(execution3,'worker_repeat',ADAPTER)
  check('RECOVERY-CRM-ambiguous-lookup',result3['contact_id']==repeated['contact_id'])
  check('RECOVERY-CRM-operation-key-idempotent',stats()['contacts']==before_repeat and repeated['resolution']=='reused')
  email4=f'{prefix}-concurrent@example.com'; execution4,idem4=fixture('concurrent',email4)
  with ThreadPoolExecutor(max_workers=2) as pool: claims=list(pool.map(claim,['worker_a','worker_b']))
  winners=[('worker_a','worker_b')[index] for index,value in enumerate(claims) if value==execution4]
- if winners: reconcile(execution4,winners[0],CRM)
+ if winners: reconcile(execution4,winners[0],ADAPTER)
  check('RECOVERY-CRM-exclusive-worker',len(winners)==1)
  email5=f'{prefix}-expired@example.com'; execution5,idem5=fixture('expired',email5,lease_worker='old_worker',lease_expired=True); reclaimed=claim('new_worker')
  check('RECOVERY-CRM-expired-lease',reclaimed==execution5)

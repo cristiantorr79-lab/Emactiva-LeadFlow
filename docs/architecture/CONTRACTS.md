@@ -50,19 +50,67 @@ Respuesta diagnóstica LF-001.C para un evento nuevo, HTTP 200:
 
 Esta respuesta confirma recepción y propiedad del evento, no success comercial. El webhook local devuelve HTTP 401 ante autenticación ausente/incorrecta, HTTP 400 para validación, HTTP 422 cuando n8n rechaza JSON sintácticamente inválido antes de ejecutar el workflow y HTTP 503 cuando no puede persistir. Ninguna respuesta incluye PII, hashes, claves, detalles SQL ni stack traces.
 
-## CRM Adapter (sin implementar)
+En production, `LEADFLOW_WEBHOOK_KEY` es obligatorio y no puede ser débil. El Core solo continúa cuando el header `X-LeadFlow-Key` coincide mediante comparación temporalmente segura; una clave ausente en configuración o solicitud falla cerrada con respuesta sanitizada. La autenticación de aplicación no sustituye HTTPS/TLS para exposición pública.
+
+## CRM Adapter
 
 - `lookupByEmail(normalized_email)` → `{found:false}` o `{found:true,contact:{id,email}}`; múltiples coincidencias son error de integridad.
 - `createContact(lead, operation_key)` → `{contact_id, created:true}`. operation_key se deriva establemente de idempotency_key y la operación. Repetirla devuelve el mismo contacto. Email tiene unicidad atómica y lectura posterior consistente en el mock.
 - `updateContact(contact_id, present_fields)` → `{contact_id}`. PATCH lógico: no borrar omitidos; email identifica el contacto y no se modifica en esta V1. Repetir los mismos campos no agrega efectos.
 - `updateEnrichment(contact_id, enrichment_fields)` → `{contact_id}`; misma garantía de repetición segura.
 
-Cada operación recibe configuración base URL/API key desde entorno y un timeout explícito que se definirá con el runtime. Errores se traducen a `{type,code,http_status,retry_after_seconds,ambiguous,message}` sanitizado; el núcleo determina retry. Un 404 de ruta o contacto de update es técnico; lookup sin coincidencia devuelve found:false. Un conflicto de creación requiere lookup, no retry ciego.
+Cada operación recibe URL upstream, API key y timeout desde entorno. La API key no se transmite hasta definir el esquema de autenticación del proveedor. Los errores se traducen al contrato sanitizado; un 404 de ruta o contacto de update es técnico, mientras lookup sin coincidencia devuelve `found:false`. Un conflicto de creación requiere lookup, no retry ciego.
 
-El mock futuro deberá simular disponibilidad, latencia, códigos HTTP, unicidad, creación completada con respuesta perdida y contadores de llamadas/contactos para LF-T13. No existe todavía servicio ejecutable.
+Los mocks locales simulan disponibilidad, latencia, códigos HTTP, unicidad, creación completada con respuesta perdida y contadores de llamadas/contactos. Siguen siendo los únicos destinos externos actuales.
 
-## Enrichment Adapter (sin implementar)
+## Enrichment Adapter
 
 `enrich({email,company?})` → `{enrichment_status:"success",data:{industry?,company_size?,website?}}`. Los campos son strings, company_size es categoría textual, website es URL pública; todos son opcionales. Solo esta lista se propaga a CRM y un resultado vacío válido es success. No sobreescribir nombres/email ni registrar la respuesta completa.
 
-Error usa el mismo contrato sanitizado que CRM. El mock futuro permitirá secuencias configurables de resultados (timeout, 429, 400, 401, 500 y éxito), latencia y Retry-After; no se invoca API real. Configuración mediante ENRICHMENT_BASE_URL y ENRICHMENT_API_KEY. Slack usa SLACK_WEBHOOK_URL solo dentro de su adaptador, nunca en logs.
+Error usa el mismo contrato sanitizado que CRM. El mock local permite resultados configurables de timeout, 429, 400, 401, 403, 5xx y éxito, además de latencia y Retry-After; no se invoca API real. Configuración mediante `ENRICHMENT_UPSTREAM_URL` y `ENRICHMENT_API_KEY`. La URL de alerta permanece dentro de su adaptador y nunca aparece en logs.
+
+## Conformidad de adaptadores LF-002.2
+
+Un adaptador es conforme cuando traduce su proveedor al contrato canónico de LeadFlow y supera `scripts/test/test_adapter_conformance.py`. El proveedor no necesita exponer el mismo HTTP ni JSON: esa traducción pertenece al adaptador y no al Core.
+
+El CRM Adapter debe buscar por email normalizado de forma determinista; representar ausencia como `found:false`; devolver un identificador opaco y estable al encontrar, crear o actualizar; mantener `operation_key` estable en CREATE; aplicar updates parciales sin borrar campos omitidos; y limitar enrichment a `industry`, `company_size` y `website`. Los errores y respuestas no pueden incluir PII, credenciales, headers ni contenido crudo del proveedor.
+
+Cada CRM Adapter declara este capability profile booleano:
+
+```json
+{
+  "consistent_lookup_after_create": true,
+  "unique_email": true,
+  "idempotent_create_operation_key": true,
+  "conflict_reconciliation": true
+}
+```
+
+Después de un CREATE ambiguo siempre se intenta lookup antes de considerar otro CREATE. Repetir CREATE solo es seguro si existe idempotencia por `operation_key`, o si el proveedor combina unicidad de email con lookup consistente posterior a CREATE. Sin esas garantías, el adaptador termina conservadoramente con `type/code = ambiguous_create`, `ambiguous:true`; nunca repite CREATE a ciegas. HTTP 409 no es retry genérico: solo permite reconciliación mediante lookup cuando `conflict_reconciliation` está declarado.
+
+El Enrichment Adapter recibe `{email, company?}` y devuelve success con un objeto `data` que contiene exclusivamente strings opcionales `industry`, `company_size` y `website`. Un resultado vacío es válido. Campos desconocidos o de tipo incorrecto se descartan. Timeout, red temporal, 429 y 5xx temporales siguen el presupuesto vigente; 400/401/403 son terminales. `Retry-After` válido se conserva y se compara con el delay local.
+
+El error canónico entre adaptador y Core es:
+
+```json
+{
+  "type": "rate_limit",
+  "code": "http_429",
+  "http_status": 429,
+  "retry_after_seconds": 7,
+  "ambiguous": false,
+  "message": "upstream dependency failed"
+}
+```
+
+`type` expresa la clase estable; `code` el código sanitizado; `http_status` puede ser null para timeout/red; `retry_after_seconds` solo aplica cuando existe; `ambiguous` distingue resultado desconocido de fallo confirmado; y `message` siempre es genérico. Ningún campo puede copiar payloads, secretos, PII, URLs firmadas o stack traces. La clasificación y los máximos 3 intentos con delays 5/15 s permanecen sin cambios respecto de LF-001.
+
+## Providers seleccionados LF-002.5
+
+`CRM_PROVIDER=hubspot` implementa lookup por email mediante Contacts Search y create/update mediante Contacts Object API versionada. Autentica exclusivamente con `Authorization: Bearer` construido dentro del Adapter. Su capability profile es conservador: `consistent_lookup_after_create=false`, `unique_email=false`, `idempotent_create_operation_key=false`, `conflict_reconciliation=true`. Tras timeout de CREATE se hace lookup; si no identifica inequívocamente el contacto, devuelve `ambiguous_create` sin segundo CREATE.
+
+Solo se envían email y los campos LeadFlow presentes. Enrichment se traduce a propiedades HubSpot configurables. `company_size` usa por defecto la propiedad textual `leadflow_company_size`, cuya creación y acceso deberán confirmarse en la prueba externa; no se fuerza a un campo numérico incompatible.
+
+`ENRICHMENT_PROVIDER=hunter` usa Combined Enrichment con el email y autentica mediante `X-API-KEY`. HTTP 404 se traduce a success sin datos; 401 y 451 son permanentes; 403 representa rate limit documentado; 429 conserva `Retry-After`, y cuando identifica cuota/uso agotado termina sin retry como `quota_exhausted`. Timeout y 5xx mantienen la política temporal vigente. Solo `industry`, `company_size` y `website` pueden salir del Adapter.
+
+HubSpot y Hunter son terceros/destinos externos del flujo de datos. Las pruebas reales deberán usar datos sintéticos o controlados. La revisión formal de base jurídica, transferencias, retención, derechos y gestión de terceros queda para LAB-LF-003; este contrato no declara cumplimiento legal.

@@ -7,7 +7,7 @@ ROOT=Path(__file__).resolve().parents[2]; sys.path.insert(0,str(ROOT/'scripts'/'
 from reconcile_crm import reconcile
 from continue_recovery import continue_recovery
 DB=os.environ['POSTGRES_DB']; APP=os.environ['POSTGRES_USER']; PASSWORD=os.environ['POSTGRES_PASSWORD']; SECRET=os.environ['RECOVERY_CONTEXT_KEY']
-CRM=os.environ.get('CRM_BASE_URL') or 'http://127.0.0.1:5683'; ENRICH=os.environ.get('ENRICHMENT_BASE_URL') or 'http://127.0.0.1:5682'; SLACK='http://127.0.0.1:5684'
+CRM=os.environ['CRM_BASE_URL']; ENRICH=os.environ['ENRICHMENT_BASE_URL']; SLACK='http://127.0.0.1:5684'; ADAPTER=os.environ['RECOVERY_ADAPTER_URL']
 prefix='completion_'+secrets.token_hex(5); created=[]; checks={}
 
 def psql(sql,app=False):
@@ -22,7 +22,7 @@ def fixture(label,email,worker,existing=False):
  psql(f"INSERT INTO leadflow.executions(execution_id,idempotency_key,event_id,source,lead_identifier,status,stage,updated_at,recovery_owner,recovery_lease_until) VALUES('{execution}','{idem}','{prefix}_{label}','website','{lead}','processing','idempotency',clock_timestamp()-interval '8 days','{worker}',clock_timestamp()+interval '30 minutes');")
  psql(f"SELECT leadflow.store_recovery_context('{execution}','{email}','{SECRET}');",True)
  if existing: request(CRM,'/crm/contacts',{'lead':{'email':email},'operation_key':prefix+':seed:'+label},'POST')
- reconciled=reconcile(execution,worker,CRM)
+ reconciled=reconcile(execution,worker,ADAPTER)
  return execution,idem,reconciled
 def check(name,value): checks[name]=bool(value); print(('PASS' if value else 'FAIL')+' '+name)
 
@@ -34,17 +34,17 @@ try:
  e4,k4,r4=fixture('terminal',f'{prefix}-terminal@example.com','worker_terminal',True)
  crm_before=request(CRM,'/stats'); contacts_before=crm_before['contacts']; creates_before=crm_before['calls']['create']
 
- success_existing=continue_recovery(e1,'worker_existing',ENRICH,CRM)
+ success_existing=continue_recovery(e1,'worker_existing',ADAPTER)
  check('RECOVERY-COMPLETE-existing-success',success_existing['status']=='success' and r1['resolution']=='reused')
- success_created=continue_recovery(e2,'worker_created',ENRICH,CRM)
+ success_created=continue_recovery(e2,'worker_created',ADAPTER)
  check('RECOVERY-COMPLETE-created-success',success_created['status']=='success' and r2['resolution']=='created')
 
  request(ENRICH,'/control/failure',{'mode':'http_500','operation':'enrich','failures':1},'POST')
- temporary=continue_recovery(e3,'worker_temporary',ENRICH,CRM); request(ENRICH,'/control/failure',method='DELETE')
+ temporary=continue_recovery(e3,'worker_temporary',ADAPTER); request(ENRICH,'/control/failure',method='DELETE')
  check('RECOVERY-COMPLETE-temporary-retry',temporary['status']=='success' and temporary['retry_count']==1)
 
  request(ENRICH,'/control/failure',{'mode':'http_400','operation':'enrich'},'POST')
- terminal=continue_recovery(e4,'worker_terminal',ENRICH,CRM,SLACK+'/webhook'); request(ENRICH,'/control/failure',method='DELETE')
+ terminal=continue_recovery(e4,'worker_terminal',ADAPTER); request(ENRICH,'/control/failure',method='DELETE')
  row=psql(f"SELECT status||'|'||error_type||'|'||error_code FROM leadflow.executions WHERE execution_id='{e4}';")
  alerts=request(SLACK,'/stats')
  check('RECOVERY-COMPLETE-terminal-alert',terminal['status']=='failed' and terminal['alert_sent'] and row=='failed|validation_error|http_400' and alerts['alert_count']==1)
@@ -58,7 +58,7 @@ try:
  check('RECOVERY-COMPLETE-keys-intact',keys=='4')
  leases=psql(f"SELECT count(*) FROM leadflow.executions WHERE execution_id IN ({values}) AND (recovery_owner IS NOT NULL OR recovery_lease_until IS NOT NULL);")
  check('RECOVERY-COMPLETE-leases-invalidated',leases=='0')
- try: continue_recovery(e1,'worker_existing',ENRICH,CRM); second=False
+ try: continue_recovery(e1,'worker_existing',ADAPTER); second=False
  except RuntimeError: second=True
  check('RECOVERY-COMPLETE-terminal-no-second-run',second)
 finally:

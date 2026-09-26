@@ -6,6 +6,30 @@ LF-001.D1 usa Docker 29.6.1, Docker Compose 5.1.4, PostgreSQL 17.6 (`postgres:17
 
 LF-002.1 añade el servicio interno de adaptadores, publicado para pruebas en `127.0.0.1:5685`. `RETRY_MAX_ATTEMPTS` admite 1–3; ambos delays y `ADAPTER_HTTP_TIMEOUT_MS` deben ser positivos. Los defaults locales conservan 3 intentos, 5/15 segundos y 2000 ms. `ADAPTER_CALL_TIMEOUT_MS` limita la llamada Core→adaptador. `CRM_API_KEY` y `ENRICHMENT_API_KEY` permanecen como placeholders: no se envían hasta seleccionar proveedor y esquema de autenticación.
 
+## Development y production
+
+`compose.yaml` es el entorno development probado: PostgreSQL, n8n, Adapter y mocks se publican solo en loopback para pruebas locales. `APP_ENV=development` permite los destinos mock explícitos. HTTP directo es válido únicamente en este entorno local controlado.
+
+Production requiere `compose.production.yaml` y validación previa:
+
+```powershell
+$env:APP_ENV = 'production'
+python scripts/validation/validate_deployment_config.py
+docker compose -f compose.yaml -f compose.production.yaml config --quiet
+```
+
+La configuración production exige base de datos, claves de webhook/cifrado/recovery, `RECOVERY_ADAPTER_URL`, host público y upstreams HTTPS explícitos. Rechaza localhost y mocks. No exige todavía `CRM_API_KEY` ni `ENRICHMENT_API_KEY`, porque su esquema se definirá con el proveedor real. El override no publica puertos de n8n, PostgreSQL, Adapter ni mocks; los mocks quedan bajo perfil `development`. La futura frontera TLS/reverse proxy debe unirse a la red de la aplicación y dirigir HTTPS al puerto interno de n8n. No exponer directamente n8n ni considerar suficiente el header de autenticación sin TLS.
+
+Los secretos se suministran fuera de Git mediante el entorno o el mecanismo de secretos de la infraestructura elegida. `.env` y variantes reales están ignorados. La configuración productiva no está lista para arrancar hasta definir infraestructura TLS y endpoints reales en LF-002.5.
+
+## Providers reales preparados
+
+LF-002.5 selecciona `CRM_PROVIDER=hubspot` con `CRM_UPSTREAM_URL=https://api.hubapi.com` y `ENRICHMENT_PROVIDER=hunter` con `ENRICHMENT_UPSTREAM_URL=https://api.hunter.io`. Production exige `CRM_API_KEY` y `ENRICHMENT_API_KEY`; nunca se guardan en Git. HubSpot requiere una Service Key con lectura/escritura de contactos y Hunter una API key habilitada para Combined Enrichment. El Adapter envía ambas por headers, no por query string.
+
+Antes de pruebas externas, confirmar en HubSpot las propiedades de contacto configuradas por `HUBSPOT_PROPERTY_INDUSTRY`, `HUBSPOT_PROPERTY_COMPANY_SIZE` y `HUBSPOT_PROPERTY_WEBSITE`. El default `leadflow_company_size` debe existir como propiedad textual. No se crean propiedades ni scopes automáticamente.
+
+Las pruebas reales están bloqueadas por defecto. Para una ejecución posterior coordinada se deberán definir fuera de Git `RUN_REAL_PROVIDER_TESTS=1`, `ALLOW_REAL_HUBSPOT_WRITE=1`, `REAL_PROVIDER_ADAPTER_URL` y `REAL_PROVIDER_TEST_EMAIL`, además de las credenciales del runtime. El email debe ser sintético/controlado. `scripts/test/test_real_providers_opt_in.py` puede crear o actualizar un contacto y consumir créditos Hunter; no ejecutarlo como parte de regresiones normales. Actualmente no existe cleanup automático del contacto HubSpot de prueba.
+
 Desde la raíz del repositorio en PowerShell:
 
 ```powershell
@@ -53,6 +77,6 @@ Verificación posterior: consultar schema_migrations, inspeccionar `\d leadflow.
 
 `validate_lab_lf_001.py` cubre infraestructura, migraciones, workflow, scripts, pruebas, documentación y secretos. Las pruebas funcionales se ejecutan por separado. El validador histórico `validate_lab.py` representa el contrato exacto de LF-000 y ya no es gate porque rechaza deliberadamente variables nuevas legítimas en `.env.example`.
 
-El webhook local es `POST http://127.0.0.1:5680/webhook/leadflow` y exige `X-LeadFlow-Key`. Un evento nuevo queda en processing; un reenvío queda duplicate. LF-T01–LF-T20 completos esperan los mocks y etapas posteriores.
+El webhook local es `POST http://127.0.0.1:5680/webhook/leadflow` y exige `X-LeadFlow-Key`. Clave ausente, incorrecta o configuración vacía se rechazan sin devolver ni registrar la clave. Un evento nuevo queda en processing; un reenvío queda duplicate. LF-T01–LF-T20 completos esperan los mocks y etapas posteriores.
 
 Para detener sin borrar datos: `docker compose stop`. Para retirar contenedor y red conservando datos: `docker compose down`. `docker compose down -v` elimina deliberadamente la base local. Las pruebas crean una base temporal aislada y la eliminan al finalizar.
