@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "frequency_hours": 24,
+  "retention_days": 30,
+  "rpo_hours": 24,
+  "rto_hours": 8,
+  "encryption_required": true,
+  "custody": "environment_defined",
+  "restore_requires_dsr_replay": true,
+  "environment_controls": {
+    "backup_execution": "NOT_VERIFIED",
+    "restore_test": "NOT_VERIFIED",
+    "storage_encryption": "NOT_VERIFIED",
+    "storage_access": "NOT_VERIFIED"
+  }
+}

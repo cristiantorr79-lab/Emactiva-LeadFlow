@@ -34,7 +34,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const crypto=require('crypto'); const headers=$json.headers||{}; const body=$json.body; const executionId='lf_exec_'+crypto.randomUUID().replace(/-/g,''); const expected=String($env.LEADFLOW_WEBHOOK_KEY||''); const supplied=String(headers['x-leadflow-key']||''); const authenticated=expected.length>0&&supplied.length===expected.length&&crypto.timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)); if(!authenticated)return{json:{route:'auth_error',execution_id:executionId}}; const contentType=String(headers['content-type']||'').toLowerCase(); if(!contentType.startsWith('application/json'))return{json:{route:'validation_error',execution_id:executionId,error_code:'content_type'}}; let code='',eventId=null,source=null; if(!body||typeof body!=='object'||Array.isArray(body))code='invalid_json'; else{eventId=typeof body.event_id==='string'?body.event_id:null; source=typeof body.source==='string'?body.source:null; if(!Object.prototype.hasOwnProperty.call(body,'event_id')||!Object.prototype.hasOwnProperty.call(body,'source')||!Object.prototype.hasOwnProperty.call(body,'lead')||!body.lead||!Object.prototype.hasOwnProperty.call(body.lead,'email'))code='missing_field'; else if(typeof body.event_id!=='string'||typeof body.source!=='string'||typeof body.lead!=='object'||Array.isArray(body.lead)||typeof body.lead.email!=='string')code='invalid_type'; else if(body.event_id.length<1||body.event_id.length>200||body.event_id.trim()!==body.event_id)code='invalid_event_id'; else if(body.source.length<1||body.source.length>100||!/^[A-Za-z0-9_-]+$/.test(body.source))code='invalid_source'; else{const email=body.lead.email.trim().toLowerCase(); const parts=email.split('@'); const labels=parts.length===2?parts[1].split('.'):[]; if(email.length>254||/\\s/.test(email)||parts.length!==2||!parts[0]||labels.length<2||labels.some(label=>!label))code='invalid_email'; else{for(const field of ['first_name','last_name','phone','company'])if(Object.prototype.hasOwnProperty.call(body.lead,field)&&(typeof body.lead[field]!=='string'||body.lead[field].length>200))code='invalid_optional_field'; if(!code){const sha=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex'); const lead={email},crm_fields={}; for(const field of ['first_name','last_name','phone','company'])if(body.lead[field]){lead[field]=body.lead[field];crm_fields[field]=body.lead[field];} return{json:{route:'valid',execution_id:executionId,event_id:body.event_id,source:body.source,lead_identifier:sha(email),idempotency_key:sha(body.source+':'+body.event_id),email,lead,crm_fields}};}}}} return{json:{route:'validation_error',execution_id:executionId,event_id:eventId,source,error_code:code}};"
+        "jsCode": "const crypto=require('crypto'); const headers=$json.headers||{}; const body=$json.body; const executionId='lf_exec_'+crypto.randomUUID().replace(/-/g,''); const expected=String($env.LEADFLOW_WEBHOOK_KEY||''); const supplied=String(headers['x-leadflow-key']||''); const authenticated=expected.length>0&&supplied.length===expected.length&&crypto.timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)); if(!authenticated)return{json:{route:'auth_error',execution_id:executionId}}; const contentType=String(headers['content-type']||'').toLowerCase(); if(!contentType.startsWith('application/json'))return{json:{route:'validation_error',execution_id:executionId,error_code:'content_type'}}; let code=''; if(!body||typeof body!=='object'||Array.isArray(body))code='invalid_json'; else if(!Object.prototype.hasOwnProperty.call(body,'event_id')||!Object.prototype.hasOwnProperty.call(body,'source')||!Object.prototype.hasOwnProperty.call(body,'lead')||!body.lead||!Object.prototype.hasOwnProperty.call(body.lead,'email'))code='missing_field'; else if(typeof body.event_id!=='string'||typeof body.source!=='string'||typeof body.lead!=='object'||Array.isArray(body.lead)||typeof body.lead.email!=='string')code='invalid_type'; else{const eventId=body.event_id; const sourceRaw=body.source; const source=sourceRaw.toLowerCase(); const allowed=String($env.LEADFLOW_ALLOWED_SOURCES||'').split(',').map(value=>value.trim().toLowerCase()).filter(value=>/^[a-z][a-z0-9_-]{0,63}$/.test(value)); if(!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(eventId)||!/[0-9._:-]/.test(eventId)||/^[0-9]{7,15}$/.test(eventId))code='invalid_event_id'; else if(!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(sourceRaw)||!allowed.includes(source))code='invalid_source'; else{const email=body.lead.email.trim().toLowerCase(); const parts=email.split('@'); const labels=parts.length===2?parts[1].split('.'):[]; if(email.length>254||/\\s/.test(email)||parts.length!==2||!parts[0]||labels.length<2||labels.some(label=>!label))code='invalid_email'; else{for(const field of ['first_name','last_name','phone','company'])if(Object.prototype.hasOwnProperty.call(body.lead,field)&&(typeof body.lead[field]!=='string'||body.lead[field].length>200))code='invalid_optional_field'; if(!code){const sha=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex'); const subjectKey=String($env.DSR_SUBJECT_KEY||''); if(subjectKey.length<32)return{json:{route:'validation_error',execution_id:executionId,error_code:'dsr_configuration'}}; const subjectToken=crypto.createHmac('sha256',subjectKey).update(email,'utf8').digest('hex'); const lead={email},crm_fields={}; for(const field of ['first_name','last_name','phone','company'])if(body.lead[field]){lead[field]=body.lead[field];crm_fields[field]=body.lead[field];} return{json:{route:'valid',execution_id:executionId,event_id:eventId,source,lead_identifier:sha(email),idempotency_key:sha(source+':'+eventId),subject_token:subjectToken,email,lead,crm_fields}};}}}} return{json:{route:'validation_error',execution_id:executionId,error_code:code}};"
       }
     },
     {
@@ -115,11 +115,11 @@
       "onError": "continueRegularOutput",
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT * FROM leadflow.claim_event($1, $2, $3, $4, $5);",
+        "query": "SELECT * FROM leadflow.claim_event($1, $2, $3, $4, $5, $6);",
         "options": {
           "queryBatching": "single",
           "connectionTimeout": 3,
-          "queryReplacement": "={{ [$json.execution_id, $json.source, $json.event_id, $json.idempotency_key, $json.lead_identifier] }}"
+          "queryReplacement": "={{ [$json.execution_id, $json.source, $json.event_id, $json.idempotency_key, $json.lead_identifier, $json.subject_token] }}"
         }
       },
       "credentials": {
@@ -145,7 +145,7 @@
         "options": {
           "queryBatching": "single",
           "connectionTimeout": 3,
-          "queryReplacement": "={{ [$json.execution_id, $json.event_id || null, $json.source || null, $json.error_code] }}"
+          "queryReplacement": "={{ [$json.execution_id, null, null, $json.error_code] }}"
         }
       },
       "credentials": {
@@ -280,7 +280,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.CRM_ADAPTER_URL+'/crm/process',body:{email:source.email,lead:source.lead,present_fields:source.crm_fields,operation_key:source.idempotency_key+':crm_create'},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:result};}catch(error){return {json:{success:false,stage:'crm_lookup',error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:0}};}"
+        "jsCode": "const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.CRM_ADAPTER_URL+'/crm/process',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,lead:source.lead,present_fields:source.crm_fields,operation_key:source.idempotency_key+':crm_create'},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:result};}catch(error){return {json:{success:false,stage:'crm_lookup',error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:0}};}"
       }
     },
     {
@@ -294,7 +294,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const context={contact_id:$json.contact_id,crm_action:$json.crm_action,base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
+        "jsCode": "const context={contact_id:$json.contact_id,crm_action:$json.crm_action,base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
       }
     },
     {
@@ -308,7 +308,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const context={contact_id:$json.contact_id,crm_action:'updated',base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
+        "jsCode": "const context={contact_id:$json.contact_id,crm_action:'updated',base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
       }
     },
     {
@@ -323,6 +323,15 @@
       "parameters": {
         "method": "PATCH",
         "url": "={{ $env.CRM_ADAPTER_URL + '/crm/update-enrichment/' + $json.contact_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LeadFlow-Adapter-Key",
+              "value": "={{ $env.ADAPTER_SERVICE_KEY }}"
+            }
+          ]
+        },
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
@@ -342,6 +351,15 @@
       "parameters": {
         "method": "PATCH",
         "url": "={{ $env.CRM_ADAPTER_URL + '/crm/update-enrichment/' + $json.contact_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LeadFlow-Adapter-Key",
+              "value": "={{ $env.ADAPTER_SERVICE_KEY }}"
+            }
+          ]
+        },
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
@@ -705,7 +723,7 @@
         -80
       ],
       "parameters": {
-        "jsCode": "const main=$('CRM Flow').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
+        "jsCode": "const main=$('CRM Flow').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
       }
     },
     {
@@ -744,7 +762,7 @@
         20
       ],
       "parameters": {
-        "jsCode": "const main=$('Enrich Created Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
+        "jsCode": "const main=$('Enrich Created Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
       }
     },
     {
@@ -783,7 +801,7 @@
         -520
       ],
       "parameters": {
-        "jsCode": "const main=$('Enrich Updated Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
+        "jsCode": "const main=$('Enrich Updated Contact').item.json; const execution_id=$('Authenticate Validate Normalize').item.json.execution_id; const payload={execution_id,stage:main.stage||'enrichment',error_code:main.error_code||'upstream_error'}; try{const result=await helpers.httpRequest({method:'POST',url:$env.ALERT_ADAPTER_URL+'/alert',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:payload,json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{execution_id,delivered:Boolean(result.delivered),alert_error_code:result.alert_error_code||null}};}catch(error){return {json:{execution_id,delivered:false,alert_error_code:'alert_adapter_unavailable'}};}"
       }
     },
     {

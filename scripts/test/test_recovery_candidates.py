@@ -5,7 +5,7 @@ from urllib.request import urlopen
 import hashlib, json, os, secrets, subprocess, sys
 
 ROOT=Path(__file__).resolve().parents[2]
-DB=os.environ['POSTGRES_DB']; APP=os.environ['POSTGRES_USER']; PASSWORD=os.environ['POSTGRES_PASSWORD']
+DB=os.environ['POSTGRES_DB']; APP=os.environ['POSTGRES_APP_USER']; PASSWORD=os.environ['POSTGRES_APP_PASSWORD']
 CRM=os.environ.get('CRM_BASE_URL') or 'http://127.0.0.1:5683'
 ENRICH=os.environ.get('ENRICHMENT_BASE_URL') or 'http://127.0.0.1:5682'
 prefix='recovery_'+secrets.token_hex(5); checks={}
@@ -29,7 +29,7 @@ def insert(label,status='processing',old=True,keyed=True,duplicate_of=None):
  stage='crm_enrichment_update' if status=='success' else 'idempotency'
  crm_action="'created'" if status=='success' else 'NULL'; crm_contact="'crm_fixture'" if status=='success' else 'NULL'
  enrichment="'success'" if status=='success' else "'not_started'"
- sql=f"INSERT INTO leadflow.executions(execution_id,idempotency_key,event_id,source,lead_identifier,status,stage,crm_action,crm_contact_id,enrichment_status,finished_at,duplicate_of) VALUES('{execution}',{values[0]},'{prefix}_{label}','website','{'a'*64}','{status}','{stage}',{crm_action},{crm_contact},{enrichment},{finished},{values[1]});"
+ sql=f"INSERT INTO leadflow.executions(execution_id,idempotency_key,source,lead_identifier,status,stage,crm_action,crm_contact_id,enrichment_status,finished_at,duplicate_of) VALUES('{execution}',{values[0]},'website','{'a'*64}','{status}','{stage}',{crm_action},{crm_contact},{enrichment},{finished},{values[1]});"
  if old: sql+=f" UPDATE leadflow.executions SET updated_at=clock_timestamp()-interval '8 days' WHERE execution_id='{execution}';"
  run_psql(sql)
  return execution,idem
@@ -56,7 +56,7 @@ try:
  owners=[value for value in results if value]
  check('RECOVERY-exclusive-claim',len(owners)==1 and owners[0].startswith(concurrent+'|'))
  check('RECOVERY-no-external-calls',stats()==external_before)
- count=run_psql("SELECT count(*) FROM leadflow.executions WHERE event_id LIKE '%s%%' AND idempotency_key IS NOT NULL;"%prefix)
+ count=run_psql("SELECT count(*) FROM leadflow.executions WHERE execution_id IN (%s) AND idempotency_key IS NOT NULL;"%','.join("'"+value+"'" for value in created))
  check('RECOVERY-keys-not-released',count=='6')
 finally:
  if created:

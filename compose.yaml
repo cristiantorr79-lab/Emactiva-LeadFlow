@@ -1,13 +1,20 @@
+x-log-policy: &log-policy
+  driver: ${DOCKER_LOG_DRIVER:-json-file}
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-10m}
+    max-file: ${DOCKER_LOG_MAX_FILE:-3}
+
 services:
   postgres:
     image: postgres:17.6-bookworm
     restart: unless-stopped
+    logging: *log-policy
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
-      POSTGRES_USER: leadflow_migrator
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-      POSTGRES_APP_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
-      POSTGRES_APP_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_USER: ${POSTGRES_MIGRATOR_USER:-leadflow_migrator}
+      POSTGRES_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD:?POSTGRES_MIGRATOR_PASSWORD is required}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?POSTGRES_APP_USER is required}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?POSTGRES_APP_PASSWORD is required}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -22,6 +29,7 @@ services:
   n8n:
     image: n8nio/n8n:2.28.6
     restart: unless-stopped
+    logging: *log-policy
     environment:
       APP_ENV: ${APP_ENV:-development}
       N8N_HOST: localhost
@@ -30,16 +38,20 @@ services:
       WEBHOOK_URL: http://localhost:${N8N_PORT:-5680}/
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY is required}
       LEADFLOW_WEBHOOK_KEY: ${LEADFLOW_WEBHOOK_KEY:?LEADFLOW_WEBHOOK_KEY is required}
+      LEADFLOW_ALLOWED_SOURCES: ${LEADFLOW_ALLOWED_SOURCES:?LEADFLOW_ALLOWED_SOURCES is required}
+      DSR_SUBJECT_KEY: ${DSR_SUBJECT_KEY:?DSR_SUBJECT_KEY is required}
       RECOVERY_CONTEXT_KEY: ${RECOVERY_CONTEXT_KEY:?RECOVERY_CONTEXT_KEY is required}
       CRM_ADAPTER_URL: http://adapters:8080
       ENRICHMENT_ADAPTER_URL: http://adapters:8080
       ALERT_ADAPTER_URL: http://adapters:8080
       ADAPTER_CALL_TIMEOUT_MS: ${ADAPTER_CALL_TIMEOUT_MS:-30000}
+      ADAPTER_SERVICE_KEY: ${ADAPTER_SERVICE_KEY:?ADAPTER_SERVICE_KEY is required}
       GENERIC_TIMEZONE: America/Santiago
       TZ: America/Santiago
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"
       N8N_VERSION_NOTIFICATIONS_ENABLED: "false"
+      N8N_LOG_LEVEL: ${N8N_LOG_LEVEL:-info}
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
       NODE_FUNCTION_ALLOW_BUILTIN: crypto
       EXECUTIONS_DATA_SAVE_ON_SUCCESS: none
@@ -77,6 +89,7 @@ services:
       dockerfile: Dockerfile
     image: leadflow-mock:python-3.14.3
     restart: unless-stopped
+    logging: *log-policy
     environment:
       MOCK_KIND: crm
       MOCK_PORT: 8080
@@ -95,6 +108,7 @@ services:
       dockerfile: Dockerfile
     image: leadflow-mock:python-3.14.3
     restart: unless-stopped
+    logging: *log-policy
     environment:
       MOCK_KIND: enrichment
       MOCK_PORT: 8080
@@ -116,6 +130,7 @@ services:
       dockerfile: Dockerfile
     image: leadflow-mock:python-3.14.3
     restart: unless-stopped
+    logging: *log-policy
     environment:
       MOCK_KIND: slack
       MOCK_PORT: 8080
@@ -134,8 +149,11 @@ services:
       dockerfile: Dockerfile
     image: leadflow-adapters:python-3.14.3
     restart: unless-stopped
+    logging: *log-policy
     environment:
       APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_OUTPUT: ${LOG_OUTPUT:-stderr}
       CRM_PROVIDER: ${CRM_PROVIDER:-mock}
       ENRICHMENT_PROVIDER: ${ENRICHMENT_PROVIDER:-mock}
       ADAPTER_PORT: 8080
@@ -148,6 +166,8 @@ services:
       RETRY_DELAY_FIRST_SECONDS: ${RETRY_DELAY_FIRST_SECONDS:-5}
       RETRY_DELAY_SECOND_SECONDS: ${RETRY_DELAY_SECOND_SECONDS:-15}
       ADAPTER_HTTP_TIMEOUT_MS: ${ADAPTER_HTTP_TIMEOUT_MS:-2000}
+      ADAPTER_SERVICE_KEY: ${ADAPTER_SERVICE_KEY:?ADAPTER_SERVICE_KEY is required}
+      ADAPTER_ALLOWED_OPERATIONS: ${ADAPTER_ALLOWED_OPERATIONS:?ADAPTER_ALLOWED_OPERATIONS is required}
       CRM_CAP_CONSISTENT_LOOKUP_AFTER_CREATE: ${CRM_CAP_CONSISTENT_LOOKUP_AFTER_CREATE:-true}
       CRM_CAP_UNIQUE_EMAIL: ${CRM_CAP_UNIQUE_EMAIL:-true}
       CRM_CAP_IDEMPOTENT_CREATE_OPERATION_KEY: ${CRM_CAP_IDEMPOTENT_CREATE_OPERATION_KEY:-true}

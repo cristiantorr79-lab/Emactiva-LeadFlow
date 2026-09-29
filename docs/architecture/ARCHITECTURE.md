@@ -20,7 +20,7 @@ LF-001 ya incorpora `workflows/` y `scripts/test/` con contenido ejecutable. `mo
 
 1. Asignar `execution_id` único y registrar recepción con mínimos metadatos.
 2. Validar entrada y normalizar email (trim, lowercase y formato). Rechazar antes de cualquier llamada externa si es inválida.
-3. Calcular SHA-256 UTF-8 de `source + ":" + event_id`, representado en hexadecimal minúsculo; reclamar el evento atómicamente en PostgreSQL.
+3. Validar `source` contra `LEADFLOW_ALLOWED_SOURCES`, normalizarlo a minúsculas, validar `event_id` como token técnico y calcular SHA-256 UTF-8 de `source + ":" + event_id`; reclamar el evento atómicamente sin persistir el `event_id` crudo.
 4. Pasar a processing; consultar CRM por email normalizado. Crear si no existe o actualizar los campos presentes si existe.
 5. Enriquecer mediante el adaptador; actualizar únicamente los campos de enriquecimiento permitidos en CRM.
 6. Persistir success y finished_at antes de responder. Si el enriquecimiento falla definitivamente, el resultado global es failed aunque el contacto ya exista; no se intenta revertirlo.
@@ -29,13 +29,17 @@ LF-001 ya incorpora `workflows/` y `scripts/test/` con contenido ejecutable. `mo
 
 La tabla `leadflow.executions` conserva una fila propietaria por evento válido, con `idempotency_key UNIQUE`. El reclamo usa una función transaccional corta: crea la recepción con clave NULL e intenta asignar la clave mediante UPDATE; la restricción UNIQUE decide el único propietario y una excepción controlada resuelve al ganador. Solo quien obtiene la clave puede procesar. Nunca usar SELECT seguido de INSERT/UPDATE sin protección de UNIQUE ni mantener una transacción abierta durante llamadas HTTP.
 
+La retención opera en PostgreSQL mediante lotes acotados. Antes de borrar, terminaliza ejecuciones processing vencidas; excluye holds activos y propietarios aún referenciados por duplicados retenidos; elimina eventos/contextos dependientes y después la ejecución. Cada corrida conserva solo conteos técnicos durante 180 días. Los plazos se suministran por entorno dentro de límites validados, sin cambiar la lógica de negocio.
+
+Las operaciones DSR usan una frontera administrativa independiente. El runtime deriva un token HMAC de sujeto y PostgreSQL consulta tombstones antes de aceptar un evento. La evidencia DSR y la coordinación de terceros contienen únicamente identificadores técnicos, estados y códigos canónicos. Un restore debe reaplicar tombstones y restricciones antes de admitir tráfico; la custodia, cifrado y ejecución del backup pertenecen al entorno.
+
 La operación oficial `leadflow.claim_event` inserta el registro received con clave NULL y su evento de auditoría. En la misma transacción intenta asignar la clave mediante UPDATE sobre esa misma fila. Si UNIQUE detecta un propietario concurrente, la excepción controlada marca la recepción actual como duplicate, mantiene su clave NULL y establece `duplicate_of` al propietario encontrado por esa clave. No se elimina ni reemplaza ninguna ejecución y ambos historiales se conservan. En logs, la clave de la recepción duplicada se obtiene mediante JOIN con su propietario. Los inválidos mantienen clave NULL, pues puede faltar source/event_id; PostgreSQL permite varios NULL bajo UNIQUE.
 
 El rol de aplicación no tiene escritura directa en estas tablas: ejecuta funciones transaccionales concedidas expresamente. Así, la operación oficial garantiza que `duplicate_of` apunta a una fila con la clave reclamada. La FK garantiza existencia y las pruebas negativas/concurrentes verifican la regla que no puede expresarse limpiamente mediante un CHECK entre filas.
 
 Un duplicado nunca modifica el estado del propietario ni dispara efectos externos. Su respuesta identifica su propia recepción y la ejecución original. Una entrega repetida de un evento failed tampoco lo reejecuta: la recuperación futura será una operación explícita sobre la ejecución original, no un bypass de UNIQUE. La misma clave con contenido distinto sigue siendo duplicada; el emisor debe asignar un nuevo event_id a cada cambio.
 
-source es un identificador sin `:`; event_id puede contenerlo. Así se evita ambigüedad en la concatenación sin cambiar la fórmula definida. Ambos son sensibles a mayúsculas y no se recortan silenciosamente.
+`source` es un slug canónico en minúsculas tomado de una allowlist de entorno y no contiene `:`. `event_id` puede contener `:` dentro de su formato técnico, se usa transitoriamente y mantiene sensibilidad a mayúsculas. No se recortan ni corrigen silenciosamente valores inválidos.
 
 Si un proceso muere en processing, la fila permanece reclamada. LAB-LF-001 deberá definir recuperación controlada de ejecuciones interrumpidas y reconciliar CRM antes de reanudarlas. No expirar ni borrar automáticamente claves para reejecutar. Un fallo de PostgreSQL bloquea efectos externos y devuelve error de infraestructura; si no puede escribirse el log, no se afirma que quedó persistido.
 
@@ -57,7 +61,7 @@ Fallo definitivo → persistir failed, error sanitizado y finished_at → intent
 
 ## Logging y seguridad
 
-Resumen mínimo: execution_id, idempotency_key, event_id, source, lead_identifier, status, stage, crm_action, crm_contact_id, enrichment_status, retry_count, error_type, error_code, error_message, started_at, finished_at. created_at/updated_at permiten auditoría. El cliente actualiza updated_at en cada mutación. Los cambios de resumen y su evento de auditoría deben confirmarse en la misma transacción.
+Resumen mínimo: execution_id, idempotency_key, source canónico, lead_identifier, status, stage, crm_action, crm_contact_id, enrichment_status, retry_count, error_type, error_code, error_message, started_at, finished_at. `event_id` no se conserva en el ledger. created_at/updated_at permiten auditoría. El cliente actualiza updated_at en cada mutación. Los cambios de resumen y su evento de auditoría deben confirmarse en la misma transacción.
 
 lead_identifier será SHA-256 del email normalizado; reduce exposición pero sigue siendo dato seudonimizado. No guardar payloads completos, nombres, teléfono ni email en texto en logs. Permitir únicamente códigos y mensajes redactados; nunca cabeceras, tokens, URLs firmadas, webhook Slack o stack traces. Slack recibe solo execution_id, etapa y código sanitizado. Configurar retención y acceso restringido a logs al implementar infraestructura.
 
@@ -65,6 +69,17 @@ Credenciales fuera de Git; `.env.example` sin valores sensibles. PostgreSQL con 
 
 El webhook local exige una clave de entorno y no se expone fuera de `127.0.0.1`. n8n guarda su configuración cifrada mediante N8N_ENCRYPTION_KEY. Las ejecuciones automáticas exitosas y fallidas no conservan datos de ejecución; esto minimiza la persistencia del payload recibido. El debugging local se apoya en respuestas sanitizadas, logs técnicos y las tablas LeadFlow, que no almacenan email, teléfono ni nombres.
 
+R2-A limita la credencial de importación n8n al instante de uso: se crea con herencia ACL deshabilitada en Windows, se importa y se elimina en `finally`; el cleanup es idempotente. Recovery entrega password y SQL a `psql` por stdin, sin email, secreto o consulta en argv, y transforma stderr/fallos de proceso en códigos operacionales genéricos.
+
+Una ejecución recovery invocada con más de `RECOVERY_MAX_PROCESSING_AGE_SECONDS` sin progreso, con máximo seguro de 604800 segundos, se terminaliza como `failed/recovery_expired` mediante una función transaccional. Solo afecta la ejecución original arrendada, conserva su clave de idempotencia y dispara el cleanup del contexto cifrado. El barrido general de retención sigue fuera de R2-A y pertenece a REM-12/R3.
+
 ## Extensibilidad
 
 Futuros CRM y proveedores implementarán los mismos contratos y pruebas de conformidad. Un motor de política podrá ampliar delays o clasificación sin dispersar constantes. Multiempresa completa, IA, dashboard y WhatsApp quedan fuera de V1; no se implementan anticipadamente.
+## Logging y portabilidad por entorno
+
+LeadFlow emite eventos operacionales JSON con nivel y salida configurables. La allowlist conserva únicamente metadata técnica (`component`, `event`, `stage`, `error_type`, `error_code`, estado, códigos HTTP, reintentos e identificadores técnicos válidos); descarta payloads, datos de contacto, headers, tokens, URLs y valores externos arbitrarios. Compose aplica a todos sus servicios un driver y límites configurables con defaults seguros.
+
+El core consume adaptadores por endpoints configurados, los secretos permanecen fuera de Git y producción usa un override sin puertos locales publicados. Los volúmenes persistentes son `leadflow_postgres_data` y `leadflow_n8n_data`; el contrato de backup está en `config/backup-policy.json` y exige reaplicar el estado DSR tras restore. Cambiar de entorno se resuelve mediante variables y overrides, sin modificar el core.
+
+Permanecen **HYBRID/ENVIRONMENT** y no verificados hasta un despliegue real: red, DNS, dominio, TLS, firewall, IAM, almacenamiento y volúmenes efectivos, cifrado de host/storage, backup/restore ejecutados, monitoreo y separación dev/test/prod desplegada.

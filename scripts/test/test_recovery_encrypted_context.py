@@ -2,7 +2,7 @@
 from pathlib import Path
 import hashlib,os,secrets,subprocess,sys
 
-ROOT=Path(__file__).resolve().parents[2]; DB=os.environ['POSTGRES_DB']; APP=os.environ['POSTGRES_USER']; PASSWORD=os.environ['POSTGRES_PASSWORD']
+ROOT=Path(__file__).resolve().parents[2]; DB=os.environ['POSTGRES_DB']; APP=os.environ['POSTGRES_APP_USER']; PASSWORD=os.environ['POSTGRES_APP_PASSWORD']
 SECRET=os.environ['RECOVERY_CONTEXT_KEY']; WRONG='f'*64 if SECRET!='f'*64 else 'e'*64
 prefix='context_'+secrets.token_hex(5); created=[]; checks={}
 
@@ -14,7 +14,7 @@ def psql(sql,app=False,allow_failure=False):
  return result.returncode,result.stdout.strip(),result.stderr.strip()
 def fixture(label,email,status='processing'):
  execution='lf_exec_'+secrets.token_hex(16); created.append(execution); idem=hashlib.sha256(f'website:{prefix}_{label}'.encode()).hexdigest(); lead=hashlib.sha256(email.encode()).hexdigest()
- psql(f"INSERT INTO leadflow.executions(execution_id,idempotency_key,event_id,source,lead_identifier,status,stage,updated_at,recovery_owner,recovery_lease_until) VALUES('{execution}','{idem}','{prefix}_{label}','website','{lead}','{status}','idempotency',clock_timestamp()-interval '8 days','worker_context',clock_timestamp()+interval '5 minutes');")
+ psql(f"INSERT INTO leadflow.executions(execution_id,idempotency_key,source,lead_identifier,status,stage,updated_at,recovery_owner,recovery_lease_until) VALUES('{execution}','{idem}','website','{lead}','{status}','idempotency',clock_timestamp()-interval '8 days','worker_context',clock_timestamp()+interval '5 minutes');")
  return execution,lead
 def check(name,value): checks[name]=bool(value); print(('PASS' if value else 'FAIL')+' '+name)
 

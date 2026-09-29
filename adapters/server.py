@@ -1,13 +1,24 @@
 """Provider-neutral HTTP adapter boundary for LeadFlow."""
-import json, os, re, time
+import hmac, json, os, re, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
+try:
+ from logging_policy import StructuredLogger
+except ModuleNotFoundError:
+ import sys
+ sys.path.insert(0,os.path.dirname(__file__))
+ from logging_policy import StructuredLogger
 
 ALLOWED_ENRICHMENT={"industry","company_size","website"}
 TEMPORARY_STATUSES={408,429,500,502,503,504}
 HUBSPOT_CAPABILITIES={"consistent_lookup_after_create":False,"unique_email":False,"idempotent_create_operation_key":False,"conflict_reconciliation":True}
+ADAPTER_OPERATIONS={"crm.process","crm.update_enrichment","enrichment.enrich","alert.send","crm.capabilities"}
+TECHNICAL_CODE=re.compile(r"^[a-z][a-z0-9_-]{0,99}$")
+OPAQUE_ID=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+TEXT_LIMITS={"industry":200,"company_size":100}
+LOGGER=StructuredLogger("adapter")
 
 def load_config(env=os.environ):
  def integer(name,default,low,high=None):
@@ -40,6 +51,11 @@ def load_config(env=os.environ):
    "conflict_reconciliation":boolean("CRM_CAP_CONFLICT_RECONCILIATION"),
   },
  }
+ service_key=str(env.get("ADAPTER_SERVICE_KEY", ""))
+ if len(service_key)<32 or any(char in service_key for char in "\r\n\0"): raise ValueError("missing or invalid ADAPTER_SERVICE_KEY")
+ allowed_operations={item.strip() for item in str(env.get("ADAPTER_ALLOWED_OPERATIONS", "")).split(",") if item.strip()}
+ if not allowed_operations or not allowed_operations<=ADAPTER_OPERATIONS: raise ValueError("missing or invalid ADAPTER_ALLOWED_OPERATIONS")
+ config.update(service_key=service_key,allowed_operations=allowed_operations)
  defaults={"crm":"http://crm-mock:8080","enrichment":"http://enrichment-mock:8080","alert":"http://slack-mock:8080/webhook"}
  config.update(crm=env.get("CRM_UPSTREAM_URL",defaults["crm"] if app_env=="development" and crm_provider=="mock" else ""),enrichment=env.get("ENRICHMENT_UPSTREAM_URL",defaults["enrichment"] if app_env=="development" and enrichment_provider=="mock" else ""),alert=env.get("ALERT_UPSTREAM_URL",defaults["alert"] if app_env=="development" else ""),crm_api_key=env.get("CRM_API_KEY",""),enrichment_api_key=env.get("ENRICHMENT_API_KEY",""))
  config["hubspot_enrichment_properties"]={"industry":env.get("HUBSPOT_PROPERTY_INDUSTRY","industry"),"company_size":env.get("HUBSPOT_PROPERTY_COMPANY_SIZE","leadflow_company_size"),"website":env.get("HUBSPOT_PROPERTY_WEBSITE","website")}
@@ -52,7 +68,7 @@ def load_config(env=os.environ):
   if any(not config[name].startswith("https://") or any(token in config[name].lower() for token in unsafe) for name in ("crm","enrichment","alert")): raise ValueError("unsafe production upstream")
  return config
 
-CONFIG=load_config()
+CONFIG=None
 
 def call(method,url,body=None,headers=None):
  data=None if body is None else json.dumps(body,separators=(",",":")).encode(); request_headers={"Content-Type":"application/json",**(headers or {})}
@@ -79,8 +95,25 @@ def wait(headers,status,attempt):
   if retry_after is not None: delay=max(delay,retry_after)
  time.sleep(delay)
 
+def technical_code(value,fallback):
+ return value if isinstance(value,str) and TECHNICAL_CODE.fullmatch(value) else fallback
+
+def opaque_id(value):
+ return value if isinstance(value,str) and OPAQUE_ID.fullmatch(value) else None
+
+def normalize_website(value):
+ if not isinstance(value,str) or len(value)>2048 or any(ord(char)<32 for char in value): return None
+ try: parsed=urlsplit(value.strip())
+ except ValueError: return None
+ if parsed.scheme.lower() not in {"http","https"} or not parsed.hostname or parsed.username or parsed.password: return None
+ try:
+  host=parsed.hostname.lower(); port=f":{parsed.port}" if parsed.port else ""
+ except ValueError: return None
+ return urlunsplit((parsed.scheme.lower(),host+port,parsed.path or "","",""))
+
 def canonical_error(status,code=None,ambiguous=False):
- return {"type":"ambiguous_create" if ambiguous else classify(status),"code":code or ("timeout" if status==0 else f"http_{status}"),"http_status":status or None,"retry_after_seconds":None,"ambiguous":bool(ambiguous),"message":"upstream dependency failed"}
+ fallback="timeout" if status==0 else f"http_{status}"
+ return {"type":"ambiguous_create" if ambiguous else classify(status),"code":technical_code(code,fallback),"http_status":status or None,"retry_after_seconds":None,"ambiguous":bool(ambiguous),"message":"upstream dependency failed"}
 
 def failure(stage,status,retries,headers=None,code=None,ambiguous=False,**context):
  error=canonical_error(status,code,ambiguous)
@@ -99,7 +132,16 @@ def safe_ambiguous_create_retry(capabilities):
  return bool(capabilities.get("idempotent_create_operation_key") or (capabilities.get("consistent_lookup_after_create") and capabilities.get("unique_email")))
 
 def filter_enrichment_fields(fields):
- return {key:value for key,value in (fields or {}).items() if key in ALLOWED_ENRICHMENT and isinstance(value,str)}
+ if not isinstance(fields,dict): return {}
+ filtered={}
+ for key in ALLOWED_ENRICHMENT:
+  value=fields.get(key)
+  if key=="website":
+   normalized=normalize_website(value)
+  else:
+   normalized=value.strip() if isinstance(value,str) and 0<len(value.strip())<=TEXT_LIMITS[key] and not any(ord(char)<32 for char in value) else None
+  if normalized is not None: filtered[key]=normalized
+ return filtered
 
 def hubspot_headers(): return {"Authorization":"Bearer "+CONFIG["crm_api_key"]}
 def hunter_headers(): return {"X-API-KEY":CONFIG["enrichment_api_key"]}
@@ -117,13 +159,18 @@ def crm_lookup(email):
  results=body.get("results") if isinstance(body,dict) else None
  if not isinstance(results,list) or len(results)>1: return 422,headers,{}
  if not results: return 200,headers,{"found":False}
- contact=results[0]; contact_id=contact.get("id") if isinstance(contact,dict) else None
+ contact=results[0]; contact_id=opaque_id(contact.get("id")) if isinstance(contact,dict) else None
  return (200,headers,{"found":True,"contact":{"id":contact_id,"email":((contact.get("properties") or {}).get("email"))}}) if isinstance(contact_id,str) else (422,headers,{})
 
 def crm_create(lead,operation_key):
- if CONFIG["crm_provider"]=="mock": return call("POST",CONFIG["crm"]+"/crm/contacts",{"lead":lead,"operation_key":operation_key})
+ if CONFIG["crm_provider"]=="mock":
+  status,headers,body=call("POST",CONFIG["crm"]+"/crm/contacts",{"lead":lead,"operation_key":operation_key})
+  if not 200<=status<300: return status,headers,{}
+  return (status,headers,{"contact_id":opaque_id(body.get("contact_id"))}) if isinstance(body,dict) and opaque_id(body.get("contact_id")) else (422,headers,{})
  status,headers,body=call("POST",CONFIG["crm"]+"/crm/v3/objects/contacts",{"properties":hubspot_properties(lead,True)},hubspot_headers())
- return status,headers,{"contact_id":body.get("id")} if isinstance(body,dict) else {}
+ if not 200<=status<300: return status,headers,{}
+ contact_id=opaque_id(body.get("id")) if isinstance(body,dict) else None
+ return (status,headers,{"contact_id":contact_id}) if contact_id else (422,headers,{})
 
 def crm_update(contact_id,fields,enrichment=False):
  if CONFIG["crm_provider"]=="mock":
@@ -140,7 +187,7 @@ def hunter_data(body):
  industry=company.get("industry") or category.get("industry")
  size=company.get("company_size") or company.get("employees") or metrics.get("employeesRange")
  website=company.get("website") or site.get("url") or company.get("domain")
- if isinstance(website,str) and website and not website.startswith(("http://","https://")): website="https://"+website
+ if isinstance(website,str) and website and "://" not in website: website="https://"+website
  return filter_enrichment_fields({"industry":industry,"company_size":str(size) if isinstance(size,(int,float)) else size,"website":website})
 
 def hunter_invalid_email(body):
@@ -194,34 +241,57 @@ def enrich(payload):
   wait(headers,status,attempt)
  return failure("enrichment",last[0],CONFIG["attempts"]-1,last[1])
 
+class SafeThreadingHTTPServer(ThreadingHTTPServer):
+ def handle_error(self,request,client_address):
+  LOGGER.emit("ERROR","request_handler_error",error_type="internal_error",error_code="adapter_unexpected_error",stage="adapter")
+
 class Handler(BaseHTTPRequestHandler):
  def log_message(self,*_): pass
  def respond(self,status,payload):
+  LOGGER.emit("INFO" if status<400 else "WARNING","http_response",http_status=status,status="success" if status<400 else "rejected")
   raw=json.dumps(payload,separators=(",",":")).encode(); self.send_response(status); self.send_header("Content-Type","application/json"); self.send_header("Content-Length",str(len(raw))); self.end_headers(); self.wfile.write(raw)
  def payload(self):
   try: value=json.loads(self.rfile.read(int(self.headers.get("Content-Length","0")))); return value if isinstance(value,dict) else None
   except Exception: return None
+ def authorize(self,operation):
+  provided=self.headers.get("X-LeadFlow-Adapter-Key","")
+  if not provided or not hmac.compare_digest(provided,CONFIG["service_key"]):
+   self.respond(401,{"error":{"type":"authentication_error","code":"adapter_identity_invalid","message":"adapter request rejected"}}); return False
+  if operation not in CONFIG["allowed_operations"]:
+   self.respond(403,{"error":{"type":"authorization_error","code":"adapter_operation_forbidden","message":"adapter request rejected"}}); return False
+  return True
  def do_GET(self):
   if self.path=="/healthz": self.respond(200,{"ok":True})
   elif self.path=="/crm/capabilities":
+   if not self.authorize("crm.capabilities"): return
    profile=dict(CONFIG["capabilities"]); profile["safe_ambiguous_create_retry"]=safe_ambiguous_create_retry(profile); self.respond(200,profile)
   else: self.respond(404,{"error":canonical_error(404)})
  def do_POST(self):
+  operations={"/crm/process":"crm.process","/enrichment/enrich":"enrichment.enrich","/alert":"alert.send"}
+  operation=operations.get(self.path)
+  if operation is not None and not self.authorize(operation): return
   payload=self.payload()
   if payload is None: return self.respond(400,{"error":canonical_error(400)})
   if self.path=="/crm/process": result=crm_process(payload)
   elif self.path=="/enrichment/enrich": result=enrich(payload)
   elif self.path=="/alert":
    allowed={"execution_id","stage","error_code"}
-   if set(payload)!=allowed: return self.respond(400,{"delivered":False,"error_code":"invalid_alert"})
+   if set(payload)!=allowed or not opaque_id(payload.get("execution_id")) or not technical_code(payload.get("stage"),"") or not technical_code(payload.get("error_code"),""): return self.respond(400,{"delivered":False,"error_code":"invalid_alert"})
    status,_,_=call("POST",CONFIG["alert"],payload); result={"delivered":200<=status<300,"alert_error_code":None if 200<=status<300 else "slack_delivery_failed"}
   else: return self.respond(404,{"error":canonical_error(404)})
   self.respond(200,result)
  def do_PATCH(self):
-  payload=self.payload(); prefix="/crm/update-enrichment/"
-  if payload is None or not self.path.startswith(prefix): return self.respond(404,{"error":canonical_error(404)})
-  contact_id=self.path[len(prefix):]; fields=filter_enrichment_fields(payload.get("fields"))
+  prefix="/crm/update-enrichment/"
+  if not self.path.startswith(prefix): return self.respond(404,{"error":canonical_error(404)})
+  if not self.authorize("crm.update_enrichment"): return
+  payload=self.payload()
+  if payload is None: return self.respond(400,{"error":canonical_error(400)})
+  contact_id=opaque_id(self.path[len(prefix):])
+  if not contact_id: return self.respond(400,{"error":canonical_error(400,"invalid_contact_id")})
+  fields=filter_enrichment_fields(payload.get("fields"))
   status,_,body=crm_update(contact_id,fields,True)
   self.respond(200,{"contact_id":body.get("contact_id",contact_id)}) if 200<=status<300 else self.respond(502,{"error":canonical_error(status)})
 
-if __name__=="__main__": ThreadingHTTPServer(("0.0.0.0",int(os.environ.get("ADAPTER_PORT","8080"))),Handler).serve_forever()
+if __name__=="__main__":
+ CONFIG=load_config()
+ SafeThreadingHTTPServer(("0.0.0.0",int(os.environ.get("ADAPTER_PORT","8080"))),Handler).serve_forever()

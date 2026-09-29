@@ -24,7 +24,7 @@ def run_psql(sql: str, database: str = TEST_DB, *, check_result: bool = True) ->
 
 
 def run_as_app(sql: str, *, check_result: bool = True) -> subprocess.CompletedProcess[str]:
-    command = ["docker", "compose", "exec", "-T", "-e", f"PGPASSWORD={os.environ['POSTGRES_PASSWORD']}", "postgres", "psql", "-h", "127.0.0.1", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", os.environ["POSTGRES_USER"], "-d", TEST_DB, "-At"]
+    command = ["docker", "compose", "exec", "-T", "-e", f"PGPASSWORD={os.environ['POSTGRES_APP_PASSWORD']}", "postgres", "psql", "-h", "127.0.0.1", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-U", os.environ["POSTGRES_APP_USER"], "-d", TEST_DB, "-At"]
     result = subprocess.run(command, cwd=ROOT, input=sql, text=True, capture_output=True)
     if check_result and result.returncode:
         raise RuntimeError("application-role command failed (details redacted)")
@@ -61,11 +61,11 @@ try:
     lead = hashlib.sha256(b"lead@example.com").hexdigest()
     owner = claim("lf_owner", source, event, key, lead)
     check("DB-004", owner == ["t", "lf_owner", ""])
-    before = scalar("SELECT status||'|'||event_id||'|'||retry_count FROM leadflow.executions WHERE execution_id='lf_owner';")
+    before = scalar("SELECT status||'|'||source||'|'||retry_count FROM leadflow.executions WHERE execution_id='lf_owner';")
     duplicate = claim("lf_duplicate", source, event, key, lead)
     check("DB-005", duplicate == ["f", "lf_duplicate", "lf_owner"])
     check("DB-006", scalar("SELECT duplicate_of FROM leadflow.executions WHERE execution_id='lf_duplicate';") == "lf_owner")
-    after = scalar("SELECT status||'|'||event_id||'|'||retry_count FROM leadflow.executions WHERE execution_id='lf_owner';")
+    after = scalar("SELECT status||'|'||source||'|'||retry_count FROM leadflow.executions WHERE execution_id='lf_owner';")
     check("DB-007", before == after)
 
     concurrent_key = hashlib.sha256(b"Website:Concurrent").hexdigest()

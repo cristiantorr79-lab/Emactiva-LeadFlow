@@ -8,7 +8,7 @@ JSON objeto, Content-Type application/json:
 {"event_id":"evt_123456","source":"website","lead":{"first_name":"Cristian","last_name":"Torres","email":"cristian@example.com","phone":"+56912345678","company":"Empresa Demo"}}
 ```
 
-Obligatorios: event_id (string 1–200 caracteres, sin espacios extremos), source (string 1–100, patrón `[A-Za-z0-9_-]+`), lead (objeto) y lead.email (string). Opcionales: first_name, last_name, phone y company (strings de hasta 200 caracteres). No se convierten números ni null a strings. Campos desconocidos se ignoran y no se propagan. Campos omitidos no borran valores del CRM; cadenas opcionales vacías se omiten.
+Obligatorios: `event_id` técnico de 1–128 caracteres, patrón `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`, con al menos un dígito o separador técnico y sin forma de teléfono numérico; `source` de 1–64 caracteres, patrón `[A-Za-z][A-Za-z0-9_-]{0,63}`, que se normaliza a minúsculas y debe pertenecer a `LEADFLOW_ALLOWED_SOURCES`; `lead` objeto y `lead.email` string. Email, URL, teléfono, nombre o texto libre no son identificadores de evento válidos. Opcionales: first_name, last_name, phone y company (strings de hasta 200 caracteres). No se convierten números ni null a strings. Campos desconocidos se ignoran y no se propagan. Campos omitidos no borran valores del CRM; cadenas opcionales vacías se omiten.
 
 Email: trim → lowercase → formato; máximo 254 caracteres, una sola @, partes no vacías, sin espacios, dominio con etiquetas no vacías separadas por punto. La validación inicial es pragmática, no comprueba entrega ni DNS; formato inválido se rechaza. El email normalizado es la identidad de búsqueda; no se intenta normalizar teléfonos en este LAB.
 
@@ -18,7 +18,25 @@ Estados: `received`, `processing`, `duplicate`, `retrying`, `success`, `failed`.
 
 Transiciones: received → processing / duplicate / failed; processing → retrying / success / failed; retrying → processing / failed. success, duplicate y failed son terminales para la entrega automática. Una recuperación administrativa futura requiere diseño explícito.
 
-El reclamo persistente recibe execution_id, source, event_id, idempotency_key y lead_identifier. Devuelve claimed, la misma execution_id y original_execution_id (NULL si obtuvo propiedad). Valida que la clave corresponda exactamente a SHA-256 UTF-8 de `source:event_id`. Los duplicados conservan clave NULL y apuntan al propietario; la escritura directa de tablas no forma parte del contrato de aplicación.
+Recovery opera siempre sobre la ejecución original y conserva `idempotency_key`. Antes de continuar comprueba el máximo `RECOVERY_MAX_PROCESSING_AGE_SECONDS`, cuyo default y límite superior son 604800 segundos. Si la ejecución arrendada excede ese tiempo sin progreso, termina en `failed` con `error_type=timeout` y `error_code=recovery_expired`; no existe purga global en este paso. Un resultado CRM ambiguo continúa usando reconciliación/lookup antes de cualquier decisión y nunca habilita un CREATE ciego.
+
+## Retención y purga
+
+`leadflow.purge_retained_data` aplica por lotes la política inicial configurable: success/duplicate 90 días desde `finished_at`, failed 180 días y processing/recovery máximo 7 días sin progreso. Una ejecución processing vencida se terminaliza primero como failed con código canónico; desde ese momento comienza su plazo terminal y no se borra en la misma operación. `execution_events` sigue el plazo de su padre y se elimina coordinadamente; el contexto recovery se elimina al terminalizar o al borrar su ejecución.
+
+Un hold activo en `retention_holds` suspende únicamente la ejecución indicada. Exige motivo técnico, owner, aprobador, inicio y revisión futura acotada; no existe hold global ni indefinido. La función es idempotente, preserva propietarios requeridos por duplicados todavía retenidos y escribe en `retention_purge_runs` solo fecha y conteos técnicos. Esta evidencia mínima se conserva 180 días y no contiene email, payload, `lead_identifier` ni otros datos personales directos.
+
+## Operaciones DSR administrativas
+
+La interfaz DSR está separada del webhook público. `scripts/admin/dsr_admin.py` recibe por stdin una solicitud previamente verificada y usa identidades lógicas `DSR_OPERATOR` y `DSR_APPROVER`; DELETE y RESTRICT exigen aprobador distinto del operador. LOCATE devuelve solo presencia/conteos, EXPORT expone campos técnicos minimizados, ANNOTATE agrega un código trazable sin reescribir historial, DELETE elimina las superficies PostgreSQL controlables y RESTRICT bloquea procesamiento futuro.
+
+El titular se correlaciona transitoriamente mediante `lead_identifier`; la evidencia persistente usa un `subject_token` HMAC no reversible. DELETE y RESTRICT crean un tombstone mínimo que no contiene email, nombre, teléfono, payload ni `lead_identifier`. El Core calcula el mismo token y `claim_event` rechaza sujetos borrados o restringidos. Solicitudes repetidas reutilizan `request_id`; resultados ambiguos o sujetos a hold no ejecutan operaciones destructivas.
+
+Cada solicitud aplicable crea acciones idempotentes para HubSpot y Hunter en estado pending, sin presumir capacidades ni SLA. Slack queda `not_applicable/no_subject_data` mientras no reciba PII del titular. Los resultados externos se limitan a provider, action, status, referencia técnica, timestamps y código sanitizado; pendientes o fallos mantienen el resultado global partial.
+
+La frontera de proceso recovery envía password y SQL por stdin a `psql`. Un fallo de proceso se representa como `recovery_database_error` con etapa `database`; una excepción recuperable que puede persistirse termina con `recovery_unexpected_error`. No se propaga stderr, SQL, email, connection string, token ni stack trace al resultado visible.
+
+El reclamo persistente recibe `execution_id`, `source` canónico, `event_id` transitorio, `idempotency_key` y `lead_identifier`. Devuelve `claimed`, la misma `execution_id` y `original_execution_id` (NULL si obtuvo propiedad). Valida que la clave corresponda exactamente a SHA-256 UTF-8 de `source:event_id`, pero no persiste el `event_id` crudo. Los duplicados conservan clave NULL y apuntan al propietario; la escritura directa de tablas no forma parte del contrato de aplicación. Los rechazos solo conservan códigos canónicos y nunca el identificador rechazado.
 
 Stages: `validation`, `idempotency`, `crm_lookup`, `crm_create`, `crm_update`, `enrichment`, `crm_enrichment_update`, `alert`. Normalización pertenece a validation. Logging y respuesta son responsabilidades transversales, no stages adicionales. El resumen conserva la etapa principal al fallar; un evento independiente registra alert.
 
@@ -51,6 +69,12 @@ Respuesta diagnóstica LF-001.C para un evento nuevo, HTTP 200:
 Esta respuesta confirma recepción y propiedad del evento, no success comercial. El webhook local devuelve HTTP 401 ante autenticación ausente/incorrecta, HTTP 400 para validación, HTTP 422 cuando n8n rechaza JSON sintácticamente inválido antes de ejecutar el workflow y HTTP 503 cuando no puede persistir. Ninguna respuesta incluye PII, hashes, claves, detalles SQL ni stack traces.
 
 En production, `LEADFLOW_WEBHOOK_KEY` es obligatorio y no puede ser débil. El Core solo continúa cuando el header `X-LeadFlow-Key` coincide mediante comparación temporalmente segura; una clave ausente en configuración o solicitud falla cerrada con respuesta sanitizada. La autenticación de aplicación no sustituye HTTPS/TLS para exposición pública.
+
+## Identidad interna del Adapter
+
+Toda operación funcional del Adapter exige el header `X-LeadFlow-Adapter-Key`. Core y recovery obtienen su valor de `ADAPTER_SERVICE_KEY`; el Adapter compara la identidad en tiempo constante y autoriza la operación contra `ADAPTER_ALLOWED_OPERATIONS`. Ambos parámetros son obligatorios, externos al código y no deben registrarse. Una identidad ausente o inválida devuelve `401`; una identidad válida sin permiso devuelve `403`; las respuestas son canónicas y no incluyen la credencial. `/healthz` queda fuera de este contrato para permitir el healthcheck local.
+
+Las operaciones configurables son `crm.process`, `crm.update_enrichment`, `enrichment.enrich`, `alert.send` y `crm.capabilities`. Esta identidad de aplicación es portable y no depende de IP, dominio o proveedor. La red, TLS interno, IAM y rotación efectiva del secreto se verifican en el entorno desplegado.
 
 ## CRM Adapter
 
@@ -104,6 +128,10 @@ El error canónico entre adaptador y Core es:
 ```
 
 `type` expresa la clase estable; `code` el código sanitizado; `http_status` puede ser null para timeout/red; `retry_after_seconds` solo aplica cuando existe; `ambiguous` distingue resultado desconocido de fallo confirmado; y `message` siempre es genérico. Ningún campo puede copiar payloads, secretos, PII, URLs firmadas o stack traces. La clasificación y los máximos 3 intentos con delays 5/15 s permanecen sin cambios respecto de LF-001.
+
+Los códigos técnicos cumplen `^[a-z][a-z0-9_-]{0,99}$`; cualquier código externo desconocido o anómalo se sustituye por el código canónico derivado del estado HTTP. Los IDs de proveedor son strings opacos de 1–200 caracteres y cumplen `^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`; LeadFlow no interpreta su estructura. Un ID fuera del contrato produce una respuesta controlada y nunca se propaga.
+
+`industry` admite texto no vacío de hasta 200 caracteres y `company_size` hasta 100; caracteres de control, tipos incorrectos y valores mayores se descartan. `website` admite como máximo 2048 caracteres, exige HTTP/HTTPS, host válido y ausencia de userinfo; se normalizan esquema y host, y se eliminan query y fragment. Esquemas peligrosos, credenciales embebidas y URLs inválidas se descartan sin realizar fetch. La salida contiene exclusivamente `industry`, `company_size` y `website`; payloads y campos adicionales del proveedor no atraviesan el Adapter.
 
 ## Providers seleccionados LF-002.5
 

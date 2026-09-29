@@ -69,7 +69,7 @@ try:
     created_ids.append(owner_body.get("execution_id", ""))
     check("N8N-001", status == 200 and owner_body.get("status") == "success" and owner_body.get("duplicate") is False)
 
-    owner_snapshot = psql(f"SELECT status||'|'||event_id||'|'||retry_count FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';")
+    owner_snapshot = psql(f"SELECT status||'|'||source||'|'||retry_count FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';")
     status, duplicate_body, duplicate_text = request(valid(event))
     created_ids.append(duplicate_body.get("execution_id", ""))
     check("N8N-002", status == 200 and duplicate_body.get("duplicate") is True)
@@ -137,7 +137,8 @@ try:
 
     public_text = " ".join([owner_text, duplicate_text, json.dumps(missing_auth[1]), json.dumps(wrong_auth[1])])
     check("N8N-022", all(value not in public_text for value in [KEY, "core@example.com", "+56900000000", "Private"]))
-    stored = psql(f"SELECT coalesce(string_agg(to_jsonb(e)::text,' '),'') FROM leadflow.executions e WHERE execution_id LIKE 'lf_exec_%' AND event_id LIKE '{PREFIX}%';")
+    stored_ids = ",".join("'" + value + "'" for value in created_ids if value.startswith("lf_exec_"))
+    stored = psql(f"SELECT coalesce(string_agg(to_jsonb(e)::text,' '),'') FROM leadflow.executions e WHERE execution_id IN ({stored_ids});")
     check("N8N-023", all(value not in stored for value in ["core@example.com", "+56900000000", "Private"]))
 
     concurrent_event = PREFIX + "_concurrent"
@@ -148,8 +149,9 @@ try:
     owners = sum(body.get("duplicate") is False for body in concurrent_bodies)
     duplicates = sum(body.get("duplicate") is True for body in concurrent_bodies)
     check("N8N-024", all(row[0] == 200 for row in simultaneous) and owners == 1 and duplicates == 1)
-    check("N8N-025", owner_snapshot == psql(f"SELECT status||'|'||event_id||'|'||retry_count FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';"))
-    concurrency_history = psql(f"SELECT count(*) FROM leadflow.execution_events ev JOIN leadflow.executions e USING(execution_id) WHERE e.event_id='{concurrent_event}';")
+    check("N8N-025", owner_snapshot == psql(f"SELECT status||'|'||source||'|'||retry_count FROM leadflow.executions WHERE execution_id='{owner_body['execution_id']}';"))
+    concurrent_ids = ",".join("'" + body.get("execution_id", "") + "'" for body in concurrent_bodies)
+    concurrency_history = psql(f"SELECT count(*) FROM leadflow.execution_events WHERE execution_id IN ({concurrent_ids});")
     check("N8N-026", concurrency_history == "5")
 finally:
     safe_ids = [value for value in created_ids if value.startswith("lf_exec_") and value.replace("lf_exec_", "").isalnum()]

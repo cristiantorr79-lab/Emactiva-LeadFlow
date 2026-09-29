@@ -1,16 +1,22 @@
 $ErrorActionPreference = 'Stop'
-foreach ($name in @('POSTGRES_DB','POSTGRES_USER','POSTGRES_PASSWORD','N8N_ENCRYPTION_KEY','LEADFLOW_WEBHOOK_KEY')) {
+. (Join-Path $PSScriptRoot 'credential_file.ps1')
+
+foreach ($name in @('POSTGRES_DB','POSTGRES_APP_USER','POSTGRES_APP_PASSWORD','N8N_ENCRYPTION_KEY','LEADFLOW_WEBHOOK_KEY')) {
     if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "Missing environment variable: $name" }
 }
 $localDir = Join-Path $PSScriptRoot '..\..\.local\n8n'
-New-Item -ItemType Directory -Path $localDir -Force | Out-Null
-$credential = @{id='leadflow-postgres';name='LeadFlow PostgreSQL';type='postgres';data=@{host='postgres';database=$env:POSTGRES_DB;user=$env:POSTGRES_USER;password=$env:POSTGRES_PASSWORD;port=5432;ssl='disable'}} | ConvertTo-Json -Depth 5 -AsArray
-[System.IO.File]::WriteAllText((Join-Path $localDir 'postgres-credential.json'),$credential,[System.Text.UTF8Encoding]::new($false))
+$credentialPath = Join-Path $localDir 'postgres-credential.json'
+$credential = @{id='leadflow-postgres';name='LeadFlow PostgreSQL';type='postgres';data=@{host='postgres';database=$env:POSTGRES_DB;user=$env:POSTGRES_APP_USER;password=$env:POSTGRES_APP_PASSWORD;port=5432;ssl='disable'}} | ConvertTo-Json -Depth 5 -AsArray
 docker compose up -d n8n
 if ($LASTEXITCODE -ne 0) { throw 'Could not start n8n.' }
 & (Join-Path $PSScriptRoot 'wait_n8n.ps1')
-docker compose exec -T n8n n8n import:credentials --input=/opt/leadflow/local/postgres-credential.json
-if ($LASTEXITCODE -ne 0) { throw 'Credential import failed.' }
+try {
+    New-LeadFlowCredentialFile -Path $credentialPath -Content $credential
+    docker compose exec -T n8n n8n import:credentials --input=/opt/leadflow/local/postgres-credential.json
+    if ($LASTEXITCODE -ne 0) { throw 'Credential import failed.' }
+} finally {
+    Remove-LeadFlowCredentialFile -Path $credentialPath
+}
 docker compose exec -T n8n n8n import:workflow --input=/opt/leadflow/workflows/leadflow_core_initial.json
 if ($LASTEXITCODE -ne 0) { throw 'Workflow import failed.' }
 docker compose exec -T n8n n8n publish:workflow --id=leadflow-core-initial

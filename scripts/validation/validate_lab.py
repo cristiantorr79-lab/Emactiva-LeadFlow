@@ -50,13 +50,27 @@ for line in read('.env.example').splitlines():
     if key in config:
         malformed = True
     config[key] = value
-expected = dict.fromkeys([
-    'POSTGRES_HOST', 'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD',
+required_config = {
+    'POSTGRES_HOST', 'POSTGRES_DB', 'POSTGRES_MIGRATOR_USER', 'POSTGRES_MIGRATOR_PASSWORD',
+    'POSTGRES_APP_USER', 'POSTGRES_APP_PASSWORD', 'ADAPTER_SERVICE_KEY', 'ADAPTER_ALLOWED_OPERATIONS', 'DSR_SUBJECT_KEY',
     'CRM_BASE_URL', 'CRM_API_KEY', 'ENRICHMENT_BASE_URL',
-    'ENRICHMENT_API_KEY', 'SLACK_WEBHOOK_URL'], '')
-expected.update(APP_ENV='development', POSTGRES_PORT='5432', RETRY_MAX_ATTEMPTS='3',
-                RETRY_DELAY_FIRST_SECONDS='5', RETRY_DELAY_SECOND_SECONDS='15')
-check('ejemplo completo sin credenciales ni URLs reales', not malformed and config == expected)
+    'ENRICHMENT_API_KEY', 'SLACK_WEBHOOK_URL', 'LOG_LEVEL', 'LOG_OUTPUT',
+    'DOCKER_LOG_DRIVER', 'DOCKER_LOG_MAX_SIZE', 'DOCKER_LOG_MAX_FILE',
+}
+empty_secrets = {
+    'POSTGRES_MIGRATOR_PASSWORD', 'POSTGRES_APP_PASSWORD', 'ADAPTER_SERVICE_KEY',
+    'DSR_SUBJECT_KEY', 'CRM_API_KEY', 'ENRICHMENT_API_KEY', 'SLACK_WEBHOOK_URL',
+}
+defaults = {
+    'APP_ENV': 'development', 'POSTGRES_PORT': '5432', 'RETRY_MAX_ATTEMPTS': '3',
+    'RETRY_DELAY_FIRST_SECONDS': '5', 'RETRY_DELAY_SECOND_SECONDS': '15',
+    'LOG_LEVEL': 'INFO', 'LOG_OUTPUT': 'stderr', 'DOCKER_LOG_DRIVER': 'json-file',
+    'DOCKER_LOG_MAX_SIZE': '10m', 'DOCKER_LOG_MAX_FILE': '3',
+}
+check('ejemplo completo sin credenciales ni URLs reales',
+      not malformed and required_config <= config.keys()
+      and all(config.get(name) == '' for name in empty_secrets)
+      and all(config.get(name) == value for name, value in defaults.items()))
 
 states = ['received', 'processing', 'duplicate', 'retrying', 'success', 'failed']
 stages = ['validation', 'idempotency', 'crm_lookup', 'crm_create', 'crm_update',
@@ -118,7 +132,13 @@ for name in sorted(set(tracked + new)):
     except OSError:
         unreadable.append(name)
         continue
-    if any(re.search(pattern, content) for pattern in patterns):
+    # Los fixtures de test identificados explícitamente como sintéticos/canarios no son secretos.
+    scan_content = content
+    if name.startswith('scripts/test/'):
+        scan_content = '\n'.join(
+            line for line in content.splitlines()
+            if 'synthetic' not in line.lower() and 'canary' not in line.lower())
+    if any(re.search(pattern, scan_content) for pattern in patterns):
         suspects.append(name)
 check('archivos auditables', not unreadable)
 check('sin secretos obvios en versionados y nuevos', not suspects)
