@@ -1,12 +1,15 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'credential_file.ps1')
 
-foreach ($name in @('POSTGRES_DB','POSTGRES_APP_USER','POSTGRES_APP_PASSWORD','N8N_ENCRYPTION_KEY','LEADFLOW_WEBHOOK_KEY')) {
+foreach ($name in @('APP_ENV','POSTGRES_DB','POSTGRES_APP_USER','POSTGRES_APP_PASSWORD','CRM_PROVIDER','ENRICHMENT_PROVIDER','N8N_ENCRYPTION_KEY','LEADFLOW_WEBHOOK_KEY')) {
     if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) { throw "Missing environment variable: $name" }
+}
+if ($env:APP_ENV -eq 'development' -and ($env:CRM_PROVIDER -cne 'mock' -or $env:ENRICHMENT_PROVIDER -cne 'mock')) {
+    throw 'Unsafe provider configuration for development.'
 }
 $localDir = Join-Path $PSScriptRoot '..\..\.local\n8n'
 $credentialPath = Join-Path $localDir 'postgres-credential.json'
-$credential = @{id='leadflow-postgres';name='LeadFlow PostgreSQL';type='postgres';data=@{host='postgres';database=$env:POSTGRES_DB;user=$env:POSTGRES_APP_USER;password=$env:POSTGRES_APP_PASSWORD;port=5432;ssl='disable'}} | ConvertTo-Json -Depth 5 -AsArray
+$credential = ConvertTo-Json -InputObject @(@{id='leadflow-postgres';name='LeadFlow PostgreSQL';type='postgres';data=@{host='postgres';database=$env:POSTGRES_DB;user=$env:POSTGRES_APP_USER;password=$env:POSTGRES_APP_PASSWORD;port=5432;ssl='disable'}}) -Depth 5
 docker compose up -d n8n
 if ($LASTEXITCODE -ne 0) { throw 'Could not start n8n.' }
 & (Join-Path $PSScriptRoot 'wait_n8n.ps1')
