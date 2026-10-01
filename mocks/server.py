@@ -67,6 +67,14 @@ class Handler(BaseHTTPRequestHandler):
                 if KIND == "slack":
                     result.update({"alert_count": len(alerts), "last_alert": dict(alerts[-1]) if alerts else None})
             self.respond(200, result)
+        elif KIND == "crm" and path == "/crm/contacts":
+            visible_fields = ("id", "first_name", "last_name", "email", "company")
+            with lock:
+                result = [
+                    {name: contact[name] for name in visible_fields if name in contact}
+                    for _, contact in sorted(contacts.items())
+                ]
+            self.respond(200, {"contacts": result})
         elif KIND == "crm" and (match := re.fullmatch(r"/crm/contacts/([^/]+)", path)):
             with lock:
                 contact = contacts.get(match.group(1))

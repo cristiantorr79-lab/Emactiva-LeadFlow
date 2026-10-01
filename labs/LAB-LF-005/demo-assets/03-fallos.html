@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeadFlow Demo — 03 Fallos y recuperación</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="failures-page">
+  <main class="slide">
+    <header class="topline"><div class="brand-line"><span>Emactiva</span><span class="product">LeadFlow</span></div><span class="slide-number">03 · Fallos y recuperación</span></header>
+    <section class="content">
+      <h1>¿Qué pasa si un servicio externo falla?<span class="translation" lang="en">(What happens if an external service fails?)</span></h1>
+      <div class="failures">
+        <article class="failure-block">
+          <h2>Problema temporal (Temporary issue)</h2>
+          <p>LeadFlow puede reintentar la operación afectada de forma controlada, sin volver a ejecutar todo el proceso.</p><p lang="en">(LeadFlow can retry the affected operation in a controlled way without rerunning the entire process.)</p>
+          <div class="flow" aria-label="Flujo de recuperación temporal">
+            <div class="step">Lead recibido<span class="en">Lead received</span></div><span class="arrow">→</span>
+            <div class="step">Procesamiento<span class="en">Processing</span></div><span class="arrow">→</span>
+            <div class="step">Servicio no disponible<span class="en">Service unavailable</span></div><span class="arrow">→</span>
+            <div class="step">Reintento controlado<span class="en">Controlled retry</span></div><span class="arrow">→</span>
+            <div class="step">Éxito<span class="en">Success</span></div>
+          </div>
+          <p class="support">Ejemplo: servicio temporalmente no disponible.<br><span lang="en">(Example: service temporarily unavailable.)</span></p>
+        </article>
+        <article class="failure-block">
+          <h2>Fallo definitivo (Definitive failure)</h2>
+          <p>Si el problema no puede recuperarse, LeadFlow registra el fallo y conserva la trazabilidad necesaria para investigarlo.</p><p lang="en">(If the issue cannot be recovered, LeadFlow records the failure and preserves the traceability needed for investigation.)</p>
+          <div class="flow" aria-label="Flujo de fallo definitivo"><div class="step">Si no se recupera<span class="en">If recovery fails</span></div><span class="arrow">→</span><div class="step">Fallo registrado<span class="en">Failure recorded</span></div><span class="arrow">→</span><div class="step">Trazabilidad<span class="en">Traceability</span></div></div>
+          <p class="support">El error queda identificado sin exponer información sensible.<br><span lang="en">(The error remains identifiable without exposing sensitive information.)</span></p>
+        </article>
+      </div>
+    </section>
+    <nav class="nav" aria-label="Navegación de pantallas"><small>Pantallas auxiliares · Demo comercial</small><div class="nav-links"><a href="02-problema.html">Anterior (Previous)</a><a class="primary" href="04-cierre.html">Siguiente (Next)</a></div></nav>
+  </main>
+</body>
+</html>

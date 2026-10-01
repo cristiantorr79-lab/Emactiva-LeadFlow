@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Emactiva LeadFlow — Demo</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Entorno de demostración (Demo environment)</p>
+    <h1>Emactiva LeadFlow — Demo</h1>
+    <p class="intro">Vuelve a enviar el mismo lead para comprobar que LeadFlow evita procesarlo dos veces.<br><span lang="en">(Send the same lead again to verify that LeadFlow prevents duplicate processing.)</span></p>
+    <form id="lead-form">
+      <label>Nombre (First name) <input name="first_name" required maxlength="200" autocomplete="off"></label>
+      <label>Apellido (Last name) <input name="last_name" maxlength="200" autocomplete="off"></label>
+      <label>Email (Email) <input name="email" type="email" required maxlength="254" autocomplete="off"></label>
+      <label>Empresa (Company) <input name="company" required maxlength="200" autocomplete="off"></label>
+      <label>Origen (Source) <input name="source" required maxlength="64" pattern="[a-z][a-z0-9_-]{0,63}" autocomplete="off"></label>
+      <label>Identificador del evento (Event ID) <span class="row"><input name="event_id" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,127}" autocomplete="off"><button type="button" id="new-id" class="secondary">Nuevo (New)</button></span></label>
+      <button type="submit" id="send">Enviar lead (Send lead)</button>
+    </form>
+    <section id="result" class="result idle" aria-live="polite">
+      <strong>Resultado (Result)</strong>
+      <span>Listo para comenzar. (Ready to start.)</span>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
