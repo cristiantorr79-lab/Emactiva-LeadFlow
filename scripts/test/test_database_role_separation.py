@@ -53,6 +53,25 @@ def main() -> int:
     if migrator_identity.stdout.strip() != migrator_user or app_identity.stdout.strip() != app_user:
         raise AssertionError("database identity did not match configured role")
 
+    attributes_sql = "SELECT rolsuper,rolcreatedb,rolcreaterole,rolreplication FROM pg_roles WHERE rolname=current_user"
+    migrator_attributes = run_psql(migrator_user, migrator_password, attributes_sql)
+    app_attributes = run_psql(app_user, app_password, attributes_sql)
+    require_success(migrator_attributes, "migrator attributes")
+    require_success(app_attributes, "application attributes")
+    if migrator_attributes.stdout.strip() != "f|f|f|f":
+        raise AssertionError("migrator retains administrative role attributes")
+    if app_attributes.stdout.strip() != "f|f|f|f":
+        raise AssertionError("application retains administrative role attributes")
+
+    schema_privileges = run_psql(
+        app_user,
+        app_password,
+        "SELECT has_schema_privilege(current_user,'leadflow','USAGE'),has_schema_privilege(current_user,'leadflow','CREATE')",
+    )
+    require_success(schema_privileges, "application schema privileges")
+    if schema_privileges.stdout.strip() != "t|f":
+        raise AssertionError("application schema privileges are not least-privilege")
+
     ddl = run_psql(
         migrator_user,
         migrator_password,
@@ -81,16 +100,19 @@ def main() -> int:
     for secret in (migrator_password, app_password):
         combined = "".join(
             result.stdout + result.stderr
-            for result in (migrator_identity, app_identity, ddl, normal, forbidden)
+            for result in (migrator_identity, app_identity, migrator_attributes, app_attributes, schema_privileges, ddl, normal, forbidden)
         )
         if secret in combined:
             raise AssertionError("credential appeared in subprocess output")
 
     print("MIGRATOR_CONNECTION=PASS")
     print("MIGRATOR_DDL=PASS")
+    print("MIGRATOR_ATTRIBUTES=PASS")
     print("APP_CONNECTION=PASS")
     print("APP_NORMAL_OPERATION=PASS")
     print("APP_ADMIN_DENIED=PASS")
+    print("APP_ATTRIBUTES=PASS")
+    print("APP_SCHEMA_USAGE_WITHOUT_CREATE=PASS")
     print("DISTINCT_IDENTITIES_AND_SECRETS=PASS")
     print("SECRET_OUTPUT_CHECK=PASS")
     return 0

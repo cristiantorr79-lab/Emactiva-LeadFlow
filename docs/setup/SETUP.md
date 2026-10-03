@@ -36,7 +36,16 @@ Desde la raíz del repositorio en PowerShell:
 Copy-Item .env.example .env
 ```
 
-Completar `.env` con el usuario de aplicación, password local, `N8N_ENCRYPTION_KEY` y `LEADFLOW_WEBHOOK_KEY` aleatorias. El contenedor inicializa el rol DDL fijo `leadflow_migrator`; n8n usa `POSTGRES_USER`, con privilegios mínimos. No versionar ni imprimir el archivo. Cargar sus variables en PowerShell y ejecutar:
+Completar `.env` con tres identidades PostgreSQL distintas y passwords aleatorias: `POSTGRES_BOOTSTRAP_USER` (administración interna), `POSTGRES_MIGRATOR_USER` (DDL limitado al schema `leadflow`) y `POSTGRES_APP_USER` (runtime sin CREATE). `POSTGRES_USER` queda reservado internamente por Compose para el bootstrap; n8n usa exclusivamente el rol app. No versionar ni imprimir el archivo.
+
+Prerequisitos del host Linux/Debian: Bash, Docker Engine y Docker Compose plugin. PowerShell no es necesario; Compose carga `.env` y el script consume la configuración validada dentro del contenedor PostgreSQL. Después de iniciar PostgreSQL, ejecutar:
+
+```bash
+docker compose up -d postgres
+bash scripts/database/apply_migrations.sh
+```
+
+En Windows se mantiene la ruta PowerShell existente. Cargar las variables de `.env` en la sesión y ejecutar:
 
 ```powershell
 Get-Content .env | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*=' } | ForEach-Object { $name, $value = $_ -split '=', 2; Set-Item "Env:$name" $value }
@@ -59,6 +68,8 @@ git diff --check
 
 Compose carga `.env`, pero los scripts también requieren sus variables en la sesión. `provision_n8n.ps1` genera una credencial PostgreSQL cifrada en `.local/`, importa el workflow y lo publica mediante la CLI documentada de n8n. La carpeta `.local/` está ignorada. Los mocks CRM y enrichment son servicios HTTP locales en memoria, configurados por entorno y todavía no integrados al workflow n8n. Reiniciar sus contenedores reinicia sus datos. Slack sigue fuera de esta etapa.
 
+La exigencia de variables en la sesión corresponde a los scripts PowerShell de Windows. La ruta Bash de migraciones no hace `source` de `.env`: obtiene nombres y configuración desde el entorno ya materializado por Compose dentro de PostgreSQL y nunca imprime passwords.
+
 ## Mocks LF-001.D1
 
 CRM expone `POST /crm/lookup`, `POST /crm/contacts`, `GET /crm/contacts/{contact_id}`, `PATCH /crm/contacts/{contact_id}` y `PATCH /crm/contacts/{contact_id}/enrichment`. Enrichment expone `POST /enrich`. Ambos incluyen `GET /healthz`. Las URL base de las pruebas se configuran con `CRM_BASE_URL` y `ENRICHMENT_BASE_URL`; los puertos publicados admiten `CRM_MOCK_PORT` y `ENRICHMENT_MOCK_PORT`. Los valores de enrichment se configuran mediante `ENRICHMENT_INDUSTRY`, `ENRICHMENT_COMPANY_SIZE` y `ENRICHMENT_WEBSITE`.
@@ -67,7 +78,13 @@ CRM expone `POST /crm/lookup`, `POST /crm/contacts`, `GET /crm/contacts/{contact
 
 ## Migración
 
-`apply_migrations.ps1` detecta versiones aplicadas y envía únicamente migraciones pendientes por stdin con `ON_ERROR_STOP=1`. `001_initial` crea persistencia y reclamo; `002_n8n_core` añade `record_validation_failure`; `003_n8n_happy_path` añade la operación oficial que persiste el resultado `success` después de CRM y enrichment. El rol de aplicación conserva lectura y ejecución de funciones oficiales, sin DML directo.
+`apply_migrations.ps1` detecta versiones aplicadas y envía únicamente migraciones pendientes por stdin con `ON_ERROR_STOP=1`. En una instalación nueva ejecuta la migración histórica e inmutable `001_initial` como bootstrap, transfiere selectivamente al migrator los objetos funcionales no-extension de `leadflow` y ejecuta 002–017 como migrator restringido. En un volumen cuyo ledger ya contiene 001 no vuelve a ejecutarla. `001_initial` crea persistencia y reclamo; `002_n8n_core` añade `record_validation_failure`; `003_n8n_happy_path` añade la operación oficial que persiste el resultado `success` después de CRM y enrichment. El rol de aplicación conserva lectura y ejecución de funciones oficiales, sin DML directo.
+
+`sync_database_roles.ps1` crea o actualiza idempotentemente los roles y fuerza `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION` tanto en migrator como app. El migrator recibe `CONNECT` y `USAGE, CREATE` solo sobre `leadflow`; app recibe `CONNECT` y `USAGE`, nunca `CREATE`. El bootstrap instala `pgcrypto` antes de las migraciones. La ejecución especial de 001 conserva intacto su contenido histórico sin conceder CREATE sobre la base ni CREATEROLE al migrator.
+
+En un volumen anterior donde el migrator es el bootstrap histórico OID 10, definir una sola vez `POSTGRES_ROLE_SYNC_USER` con el nombre del migrator y ejecutar `apply_migrations.ps1`. La reparación aborta antes de renombrar roles si el bootstrap destino posee objetos, existen memberships inesperadas, el topology no coincide o hay objetos de usuario no soportados fuera de `leadflow`. Si las guardas pasan, usa tres sesiones: renombra temporalmente el bootstrap nuevo vacío, conserva el OID 10 renombrándolo al nombre bootstrap, crea un migrator restringido, transfiere selectivamente schema/tablas/secuencias/rutinas/tipos propios de `leadflow`, conserva extensiones con el OID 10 y elimina el rol transitorio solo tras demostrar que está vacío. Después se verifican roles/ownership/runtime y se retira `POSTGRES_ROLE_SYNC_USER`. No usa `REASSIGN OWNED` global. Los secretos siguen siendo configuración de ENVIRONMENT fuera de Git; la separación y los grants son controles SYSTEM.
+
+En Linux esa misma reparación se ejecuta con `bash scripts/database/apply_migrations.sh`; en Windows, con `./scripts/database/apply_migrations.ps1`. Ambos reutilizan los mismos SQL validados y distinguen instalación nueva de volumen heredado.
 
 No ejecutar con valores vacíos. La migración incorpora BEGIN/COMMIT y un ledger `leadflow.schema_migrations`. La inserción de versión ocurre antes del DDL de negocio; una repetición falla por PK y revierte la transacción, sin eliminar datos. Es **segura bajo este mecanismo, no un script de repetición silenciosa**. ON_ERROR_STOP y una conexión psql dedicada son obligatorios. No editar una migración aplicada ni marcar versiones manualmente.
 

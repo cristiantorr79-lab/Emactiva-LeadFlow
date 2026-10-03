@@ -274,6 +274,7 @@ Debe comprobar como mínimo:
 - secretos disponibles mediante mecanismo externo;
 - endpoints definidos;
 - PostgreSQL disponible;
+- rol administrativo/bootstrap interno definido y separado;
 - rol de migraciones definido;
 - rol de aplicación definido;
 - conectividad necesaria disponible;
@@ -331,7 +332,9 @@ Las migraciones deben:
 - ejecutarse mediante el mecanismo oficial;
 - mantener ON_ERROR_STOP;
 - ejecutarse con rol de migraciones;
+- comprobar que el rol de migraciones sea `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION` y tenga CREATE solo en el schema LeadFlow;
 - mantener separado el rol de aplicación;
+- comprobar atributos y privilegios efectivos de cada rol, no solo la existencia de usuarios distintos;
 - no editar migraciones ya aplicadas;
 - no marcar versiones manualmente;
 - no ejecutar cambios destructivos improvisados.

@@ -19,7 +19,8 @@ dev_adapter=adapter.load_config(development)
 check('SEC-002 development mocks available',all('-mock' in dev_adapter[name] for name in ('crm','enrichment','alert')))
 
 production={
- 'APP_ENV':'production','POSTGRES_DB':'leadflow','POSTGRES_MIGRATOR_USER':'leadflow_migrator',
+ 'APP_ENV':'production','POSTGRES_DB':'leadflow','POSTGRES_BOOTSTRAP_USER':'leadflow_bootstrap',
+ 'POSTGRES_BOOTSTRAP_PASSWORD':'b'*32,'POSTGRES_MIGRATOR_USER':'leadflow_migrator',
  'POSTGRES_MIGRATOR_PASSWORD':'m'*32,'POSTGRES_APP_USER':'leadflow_app',
  'POSTGRES_APP_PASSWORD':'p'*32,'LEADFLOW_WEBHOOK_KEY':'w'*32,'N8N_ENCRYPTION_KEY':'n'*32,
  'RECOVERY_CONTEXT_KEY':'r'*32,'RECOVERY_ADAPTER_URL':'http://adapters:8080',

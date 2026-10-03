@@ -57,6 +57,8 @@ def production_environment() -> dict[str, str]:
     return {
         "APP_ENV": "production",
         "POSTGRES_DB": "leadflow_synthetic",
+        "POSTGRES_BOOTSTRAP_USER": "leadflow_bootstrap_synthetic",
+        "POSTGRES_BOOTSTRAP_PASSWORD": strong + "-bootstrap",
         "POSTGRES_MIGRATOR_USER": "leadflow_migrator_synthetic",
         "POSTGRES_MIGRATOR_PASSWORD": strong + "-migrator",
         "POSTGRES_APP_USER": "leadflow_app_synthetic",
@@ -94,7 +96,7 @@ def validate_no_secrets() -> None:
         re.compile(r"https://hooks\.slack\.com/services/[A-Z0-9]{8,}/[A-Z0-9]{8,}/[A-Za-z0-9]{16,}"),
         re.compile(
             r"(?im)^\s*(?:LEADFLOW_WEBHOOK_KEY|CRM_API_KEY|ENRICHMENT_API_KEY|"
-            r"POSTGRES_(?:APP|MIGRATOR)_PASSWORD)\s*[=:]\s*[`\"']?"
+            r"POSTGRES_(?:APP|MIGRATOR|BOOTSTRAP)_PASSWORD)\s*[=:]\s*[`\"']?"
             r"(?!\s*(?:$|<|\{|\[|REDACTED|PLACEHOLDER|EXAMPLE))\S+"
         ),
     )
