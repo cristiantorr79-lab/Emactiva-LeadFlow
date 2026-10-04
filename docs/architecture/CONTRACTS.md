@@ -142,3 +142,10 @@ Solo se envían email y los campos LeadFlow presentes. Enrichment se traduce a p
 `ENRICHMENT_PROVIDER=hunter` usa Combined Enrichment con el email y autentica mediante `X-API-KEY`. HTTP 404 se traduce a success sin datos; 401 y 451 son permanentes; 403 representa rate limit documentado; 429 conserva `Retry-After`, y cuando identifica cuota/uso agotado termina sin retry como `quota_exhausted`. Timeout y 5xx mantienen la política temporal vigente. Solo `industry`, `company_size` y `website` pueden salir del Adapter.
 
 HubSpot y Hunter son terceros/destinos externos del flujo de datos. Las pruebas reales deberán usar datos sintéticos o controlados. La revisión formal de base jurídica, transferencias, retención, derechos y gestión de terceros queda para LAB-LF-003; este contrato no declara cumplimiento legal.
+# Interaction (LF-008)
+
+`interaction` es opcional y admite sólo `interest` (máximo 100, allowlist `LEADFLOW_ALLOWED_INTERESTS`) y `message` (máximo 2000). Ambos deben ser strings; vacío tras trim equivale a omitido. `message` sólo recibe trim exterior y conserva contenido interno, saltos de línea y Unicode. Campos desconocidos no se propagan.
+
+El adapter neutral ofrece `recordInteraction(contact_id, interaction, operation_key)` y reconciliación por la misma clave. La respuesta contiene únicamente éxito, identificador opaco, resolución `created`/`reused`, reintentos y error sanitizado. Un lookup negativo sólo habilita repetición cuando declara ausencia concluyente.
+
+LeadFlow no registra ni devuelve el mensaje. El contexto local cifrado existe únicamente durante processing/recovery. La interacción ya confirmada vive en el CRM externo: retención, exportación, corrección y eliminación en ese sistema dependen del provider adapter y de la configuración contractual del cliente; borrar el contexto local no borra el objeto externo.

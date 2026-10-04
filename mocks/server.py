@@ -15,12 +15,15 @@ ENRICHMENT_FIELDS = {"industry", "company_size", "website"}
 contacts = {}
 contacts_by_email = {}
 contacts_by_operation = {}
+interactions = {}
+interactions_by_operation = {}
 next_contact = 1
+next_interaction = 1
 lock = threading.Lock()
-calls = {"lookup": 0, "create": 0, "update": 0, "update_enrichment": 0, "enrich": 0}
+calls = {"lookup": 0, "create": 0, "update": 0, "update_enrichment": 0, "interaction": 0, "reconcile_interaction": 0, "enrich": 0}
 alerts = []
 failure = None
-FAILURE_MODES = {"timeout", "http_400", "http_401", "http_403", "http_404", "http_408", "http_409", "http_429", "http_500", "http_502", "http_503", "http_504", "ambiguous_create"}
+FAILURE_MODES = {"timeout", "http_400", "http_401", "http_403", "http_404", "http_408", "http_409", "http_429", "http_500", "http_502", "http_503", "http_504", "ambiguous_create", "ambiguous_interaction"}
 
 
 def normalized_email(value):
@@ -63,7 +66,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, {"ok": True, "service": KIND})
         elif path == "/stats":
             with lock:
-                result = {"calls": dict(calls), "contacts": len(contacts) if KIND == "crm" else None}
+                result = {"calls": dict(calls), "contacts": len(contacts) if KIND == "crm" else None, "interactions": len(interactions) if KIND == "crm" else None}
                 if KIND == "slack":
                     result.update({"alert_count": len(alerts), "last_alert": dict(alerts[-1]) if alerts else None})
             self.respond(200, result)
@@ -103,9 +106,13 @@ class Handler(BaseHTTPRequestHandler):
             self.crm_lookup(payload)
         elif KIND == "crm" and path == "/crm/contacts" and not self.simulate("create", payload):
             self.crm_create(payload)
+        elif KIND == "crm" and path == "/crm/interactions" and not self.simulate("interaction", payload):
+            self.crm_interaction(payload)
+        elif KIND == "crm" and path == "/crm/interactions/reconcile" and not self.simulate("reconcile_interaction"):
+            self.reconcile_interaction(payload)
         elif KIND == "enrichment" and path == "/enrich" and not self.simulate("enrich"):
             self.enrich(payload)
-        elif path not in {"/crm/lookup", "/crm/contacts", "/enrich"}:
+        elif path not in {"/crm/lookup", "/crm/contacts", "/crm/interactions", "/crm/interactions/reconcile", "/enrich"}:
             self.respond(404, {"error": {"type": "technical_not_found"}})
 
     def do_PATCH(self):
@@ -145,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
         delay = payload.get("delay_seconds", 1)
         retry_after = payload.get("retry_after_seconds", 3)
         failures = payload.get("failures")
-        allowed = ({"*", "lookup", "create", "update", "update_enrichment"} if KIND == "crm"
+        allowed = ({"*", "lookup", "create", "update", "update_enrichment", "interaction", "reconcile_interaction"} if KIND == "crm"
                    else {"*", "enrich"} if KIND == "enrichment" else {"*", "alert"})
         if mode not in FAILURE_MODES or operation not in allowed or not isinstance(delay, (int, float)) or delay <= 0 or not isinstance(retry_after, int) or retry_after < 0 or (failures is not None and (not isinstance(failures, int) or failures < 1)):
             self.respond(400, {"error": {"type": "validation_error"}})
@@ -170,6 +177,10 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(configured["delay"])
                 return True
             self.respond(409, {"error": {"type": "conflict_error"}})
+            return True
+        if mode == "ambiguous_interaction" and operation == "interaction":
+            self.create_interaction(payload)
+            time.sleep(configured["delay"])
             return True
         if mode == "timeout":
             time.sleep(configured["delay"])
@@ -252,6 +263,35 @@ class Handler(BaseHTTPRequestHandler):
                 return
             contact.update(fields)
         self.respond(200, {"contact_id": contact_id})
+
+    def create_interaction(self, payload):
+        global next_interaction
+        contact_id, interaction, operation_key = payload.get("contact_id"), payload.get("interaction"), payload.get("operation_key")
+        if contact_id not in contacts or not isinstance(interaction, dict) or not interaction or set(interaction) - {"interest", "message"} or not isinstance(operation_key, str) or not operation_key:
+            return 400, {"error": {"type": "validation_error"}}
+        with lock:
+            calls["interaction"] += 1
+            existing = interactions_by_operation.get(operation_key)
+            if existing is not None:
+                return 200, {"interaction_id": existing, "created": False}
+            interaction_id = f"int_{next_interaction:06d}"
+            next_interaction += 1
+            interactions[interaction_id] = {"id": interaction_id, "contact_id": contact_id, **interaction}
+            interactions_by_operation[operation_key] = interaction_id
+        return 201, {"interaction_id": interaction_id, "created": True}
+
+    def crm_interaction(self, payload):
+        status, result = self.create_interaction(payload)
+        self.respond(status, result)
+
+    def reconcile_interaction(self, payload):
+        operation_key = payload.get("operation_key")
+        if not isinstance(operation_key, str) or not operation_key:
+            self.respond(400, {"error": {"type": "validation_error"}}); return
+        with lock:
+            calls["reconcile_interaction"] += 1
+            interaction_id = interactions_by_operation.get(operation_key)
+        self.respond(200, {"found": interaction_id is not None, "interaction_id": interaction_id, "absence_conclusive": True})
 
     def enrich(self, payload):
         email = normalized_email(payload.get("email"))

@@ -34,7 +34,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const crypto=require('crypto'); const headers=$json.headers||{}; const body=$json.body; const executionId='lf_exec_'+crypto.randomUUID().replace(/-/g,''); const expected=String($env.LEADFLOW_WEBHOOK_KEY||''); const supplied=String(headers['x-leadflow-key']||''); const authenticated=expected.length>0&&supplied.length===expected.length&&crypto.timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)); if(!authenticated)return{json:{route:'auth_error',execution_id:executionId}}; const contentType=String(headers['content-type']||'').toLowerCase(); if(!contentType.startsWith('application/json'))return{json:{route:'validation_error',execution_id:executionId,error_code:'content_type'}}; let code=''; if(!body||typeof body!=='object'||Array.isArray(body))code='invalid_json'; else if(!Object.prototype.hasOwnProperty.call(body,'event_id')||!Object.prototype.hasOwnProperty.call(body,'source')||!Object.prototype.hasOwnProperty.call(body,'lead')||!body.lead||!Object.prototype.hasOwnProperty.call(body.lead,'email'))code='missing_field'; else if(typeof body.event_id!=='string'||typeof body.source!=='string'||typeof body.lead!=='object'||Array.isArray(body.lead)||typeof body.lead.email!=='string')code='invalid_type'; else{const eventId=body.event_id; const source=body.source; const allowed=String($env.LEADFLOW_ALLOWED_SOURCES||'').split(',').filter(value=>/^[A-Za-z0-9_-]{1,100}$/.test(value)); if(eventId.length<1||eventId.length>200||eventId!==eventId.trim())code='invalid_event_id'; else if(!/^[A-Za-z0-9_-]{1,100}$/.test(source)||!allowed.includes(source))code='invalid_source'; else{const email=body.lead.email.trim().toLowerCase(); const parts=email.split('@'); const labels=parts.length===2?parts[1].split('.'):[]; if(email.length>254||/\\s/.test(email)||parts.length!==2||!parts[0]||labels.length<2||labels.some(label=>!label))code='invalid_email'; else{for(const field of ['first_name','last_name','phone','company'])if(Object.prototype.hasOwnProperty.call(body.lead,field)&&(typeof body.lead[field]!=='string'||body.lead[field].length>200))code='invalid_optional_field'; if(!code){const sha=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex'); const subjectKey=String($env.DSR_SUBJECT_KEY||''); if(subjectKey.length<32)return{json:{route:'validation_error',execution_id:executionId,error_code:'dsr_configuration'}}; const subjectToken=crypto.createHmac('sha256',subjectKey).update(email,'utf8').digest('hex'); const lead={email},crm_fields={}; for(const field of ['first_name','last_name','phone','company'])if(body.lead[field]){lead[field]=body.lead[field];crm_fields[field]=body.lead[field];} return{json:{route:'valid',execution_id:executionId,event_id:eventId,source,lead_identifier:sha(email),idempotency_key:sha(source+':'+eventId),subject_token:subjectToken,email,lead,crm_fields}};}}}} return{json:{route:'validation_error',execution_id:executionId,error_code:code}};"
+        "jsCode": "const crypto=require('crypto'); const headers=$json.headers||{}; const body=$json.body; const executionId='lf_exec_'+crypto.randomUUID().replace(/-/g,''); const expected=String($env.LEADFLOW_WEBHOOK_KEY||''); const supplied=String(headers['x-leadflow-key']||''); const authenticated=expected.length>0&&supplied.length===expected.length&&crypto.timingSafeEqual(Buffer.from(supplied),Buffer.from(expected)); if(!authenticated)return{json:{route:'auth_error',execution_id:executionId}}; const contentType=String(headers['content-type']||'').toLowerCase(); if(!contentType.startsWith('application/json'))return{json:{route:'validation_error',execution_id:executionId,error_code:'content_type'}}; let code=''; if(!body||typeof body!=='object'||Array.isArray(body))code='invalid_json'; else if(!Object.prototype.hasOwnProperty.call(body,'event_id')||!Object.prototype.hasOwnProperty.call(body,'source')||!Object.prototype.hasOwnProperty.call(body,'lead')||!body.lead||!Object.prototype.hasOwnProperty.call(body.lead,'email'))code='missing_field'; else if(typeof body.event_id!=='string'||typeof body.source!=='string'||typeof body.lead!=='object'||Array.isArray(body.lead)||typeof body.lead.email!=='string'||(Object.prototype.hasOwnProperty.call(body,'interaction')&&(body.interaction===null||typeof body.interaction!=='object'||Array.isArray(body.interaction))))code='invalid_type'; else{const eventId=body.event_id; const source=body.source; const allowed=String($env.LEADFLOW_ALLOWED_SOURCES||'').split(',').filter(value=>/^[A-Za-z0-9_-]{1,100}$/.test(value)); if(eventId.length<1||eventId.length>200||eventId!==eventId.trim())code='invalid_event_id'; else if(!/^[A-Za-z0-9_-]{1,100}$/.test(source)||!allowed.includes(source))code='invalid_source'; else{const email=body.lead.email.trim().toLowerCase(); const parts=email.split('@'); const labels=parts.length===2?parts[1].split('.'):[]; if(email.length>254||/\\s/.test(email)||parts.length!==2||!parts[0]||labels.length<2||labels.some(label=>!label))code='invalid_email'; else{for(const field of ['first_name','last_name','phone','company'])if(Object.prototype.hasOwnProperty.call(body.lead,field)&&(typeof body.lead[field]!=='string'||body.lead[field].length>200))code='invalid_optional_field'; const interaction={}; if(!code&&body.interaction)for(const [field,limit] of [['interest',100],['message',2000]])if(Object.prototype.hasOwnProperty.call(body.interaction,field)){const value=body.interaction[field];if(typeof value!=='string')code='invalid_interaction';else{const trimmed=value.trim();if(trimmed.length>limit)code='invalid_interaction';else if(trimmed)interaction[field]=trimmed;}} const allowedInterests=String($env.LEADFLOW_ALLOWED_INTERESTS||'').split(',').map(value=>value.trim()).filter(Boolean); if(!code&&interaction.interest&&!allowedInterests.includes(interaction.interest))code='invalid_interest'; if(!code){const sha=value=>crypto.createHash('sha256').update(value,'utf8').digest('hex'); const subjectKey=String($env.DSR_SUBJECT_KEY||''); if(subjectKey.length<32)return{json:{route:'validation_error',execution_id:executionId,error_code:'dsr_configuration'}}; const subjectToken=crypto.createHmac('sha256',subjectKey).update(email,'utf8').digest('hex'); const lead={email},crm_fields={}; for(const field of ['first_name','last_name','phone','company'])if(body.lead[field]){lead[field]=body.lead[field];crm_fields[field]=body.lead[field];} return{json:{route:'valid',execution_id:executionId,event_id:eventId,source,lead_identifier:sha(email),idempotency_key:sha(source+':'+eventId),subject_token:subjectToken,email,lead,crm_fields,...(Object.keys(interaction).length?{interaction}:{})}};}}}} return{json:{route:'validation_error',execution_id:executionId,error_code:code}};"
       }
     },
     {
@@ -280,7 +280,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.CRM_ADAPTER_URL+'/crm/process',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,lead:source.lead,present_fields:source.crm_fields,operation_key:source.idempotency_key+':crm_create'},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:result};}catch(error){return {json:{success:false,stage:'crm_lookup',error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:0}};}"
+        "jsCode": "const source=$('Authenticate Validate Normalize').item.json; const headers={'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY}; const timeout=Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000)); try{if(source.interaction){const caps=await helpers.httpRequest({method:'GET',url:$env.CRM_ADAPTER_URL+'/crm/capabilities',headers,json:true,timeout});if(!caps.interaction_write||!caps.interaction_idempotency||!caps.interaction_reconciliation)return {json:{success:false,stage:'crm_interaction',error_type:'authorization_error',error_code:'interaction_capability_missing',retry_count:0}};} const result=await helpers.httpRequest({method:'POST',url:$env.CRM_ADAPTER_URL+'/crm/process',headers,body:{email:source.email,lead:source.lead,present_fields:source.crm_fields,operation_key:source.idempotency_key+':crm_create'},json:true,timeout}); return {json:result};}catch(error){return {json:{success:false,stage:'crm_lookup',error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:0}};}"
       }
     },
     {
@@ -294,7 +294,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const context={contact_id:$json.contact_id,crm_action:$json.crm_action,base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
+        "jsCode": "const crm=$('CRM Flow').item.json; const interaction=$('CRM Interaction').item.json; const context={contact_id:crm.contact_id,crm_action:crm.crm_action,base_retry_count:Number(interaction.retry_count||crm.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
       }
     },
     {
@@ -308,7 +308,7 @@
       ],
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const context={contact_id:$json.contact_id,crm_action:'updated',base_retry_count:Number($json.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
+        "jsCode": "const crm=$('CRM Flow').item.json; const interaction=$('CRM Interaction').item.json; const context={contact_id:crm.contact_id,crm_action:'updated',base_retry_count:Number(interaction.retry_count||crm.retry_count||0)}; const source=$('Authenticate Validate Normalize').item.json; try{const result=await helpers.httpRequest({method:'POST',url:$env.ENRICHMENT_ADAPTER_URL+'/enrichment/enrich',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{email:source.email,...(source.lead.company?{company:source.lead.company}:{})},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...context,...result,retry_count:context.base_retry_count+Number(result.retry_count||0)}};}catch(error){return {json:{...context,success:false,error_type:'upstream_error',error_code:'adapter_unavailable',retry_count:context.base_retry_count}};}"
       }
     },
     {
@@ -831,6 +831,56 @@
       }
     },
     {
+      "id": "persist-crm-contact-checkpoint",
+      "name": "Persist CRM Contact Checkpoint",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [700,-300],
+      "parameters": {"operation":"executeQuery","query":"SELECT leadflow.record_crm_contact_checkpoint($1,$2,$3,$4);","options":{"queryBatching":"single","connectionTimeout":3,"queryReplacement":"={{ [$('Authenticate Validate Normalize').item.json.execution_id,$('CRM Flow').item.json.crm_action,$('CRM Flow').item.json.contact_id,$('CRM Flow').item.json.retry_count||0] }}"}},
+      "credentials": {"postgres":{"id":"leadflow-postgres","name":"LeadFlow PostgreSQL"}}
+    },
+    {
+      "id": "crm-interaction",
+      "name": "CRM Interaction",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850,-300],
+      "parameters": {"mode":"runOnceForEachItem","jsCode":"const source=$('Authenticate Validate Normalize').item.json; const crm=$('CRM Flow').item.json; if(!source.interaction)return {json:{success:true,interaction_required:false,retry_count:Number(crm.retry_count||0)}}; try{const result=await helpers.httpRequest({method:'POST',url:$env.CRM_ADAPTER_URL+'/crm/record-interaction',headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{contact_id:crm.contact_id,interaction:source.interaction,operation_key:source.idempotency_key+':crm_interaction'},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000))}); return {json:{...result,interaction_required:true,retry_count:Number(crm.retry_count||0)+Number(result.retry_count||0)}};}catch(error){return {json:{success:false,interaction_required:true,stage:'crm_interaction',error_type:'ambiguous_interaction',error_code:'ambiguous_interaction',ambiguous:true,retry_count:Number(crm.retry_count||0)}};}"}
+    },
+    {
+      "id": "persist-interaction-outcome",
+      "name": "Persist Interaction Outcome",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1000,-300],
+      "parameters": {"operation":"executeQuery","query":"SELECT CASE WHEN $2::boolean THEN leadflow.record_interaction_outcome($1,$3::boolean,$4,$5,$6::boolean) ELSE true END;","options":{"queryBatching":"single","connectionTimeout":3,"queryReplacement":"={{ [$('Authenticate Validate Normalize').item.json.execution_id,$('CRM Interaction').item.json.interaction_required,$('CRM Interaction').item.json.success,$('CRM Interaction').item.json.interaction_id||null,$('CRM Interaction').item.json.retry_count||0,$('CRM Interaction').item.json.ambiguous||false] }}"}},
+      "credentials": {"postgres":{"id":"leadflow-postgres","name":"LeadFlow PostgreSQL"}}
+    },
+    {
+      "id": "interaction-ok",
+      "name": "Interaction Succeeded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1150,-300],
+      "parameters": {"conditions":{"options":{"caseSensitive":true,"typeValidation":"strict","version":2},"conditions":[{"id":"interaction-ok-condition","leftValue":"={{ $('CRM Interaction').item.json.success }}","rightValue":true,"operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}}
+    },
+    {
+      "id": "interaction-ambiguous",
+      "name": "Interaction Ambiguous",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1300,-380],
+      "parameters": {"conditions":{"options":{"caseSensitive":true,"typeValidation":"strict","version":2},"conditions":[{"id":"interaction-ambiguous-condition","leftValue":"={{ $('CRM Interaction').item.json.ambiguous === true && $('CRM Interaction').item.json.error_code === 'ambiguous_interaction' }}","rightValue":true,"operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}}
+    },
+    {
+      "id": "respond-interaction-recoverable",
+      "name": "Respond Interaction Recoverable",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1500,-360],
+      "parameters": {"respondWith":"json","responseBody":"={{ { ok:false, execution_id:$('Authenticate Validate Normalize').item.json.execution_id, status:'processing', recoverable:true, error:{type:'ambiguous_interaction'} } }}","options":{"responseCode":202}}
+    },
+    {
       "id": "store-recovery-context",
       "name": "Store Recovery Context",
       "type": "n8n-nodes-base.postgres",
@@ -841,11 +891,11 @@
       ],
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT leadflow.store_recovery_context($1,$2,$3);",
+        "query": "SELECT leadflow.store_recovery_context($1,$2,$3::jsonb,$4);",
         "options": {
           "queryBatching": "single",
           "connectionTimeout": 3,
-          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id,$('Authenticate Validate Normalize').item.json.email,$env.RECOVERY_CONTEXT_KEY] }}"
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id,$('Authenticate Validate Normalize').item.json.email,$('Authenticate Validate Normalize').item.json.interaction ? JSON.stringify($('Authenticate Validate Normalize').item.json.interaction) : null,$env.RECOVERY_CONTEXT_KEY] }}"
         }
       },
       "credentials": {
@@ -1152,7 +1202,7 @@
       "main": [
         [
           {
-            "node": "Enrich Created Contact",
+            "node": "Persist CRM Contact Checkpoint",
             "type": "main",
             "index": 0
           }
@@ -1243,6 +1293,11 @@
         ]
       ]
     },
+    "Persist CRM Contact Checkpoint": {"main":[[{"node":"CRM Interaction","type":"main","index":0}]]},
+    "CRM Interaction": {"main":[[{"node":"Persist Interaction Outcome","type":"main","index":0}]]},
+    "Persist Interaction Outcome": {"main":[[{"node":"Interaction Succeeded","type":"main","index":0}]]},
+    "Interaction Succeeded": {"main":[[{"node":"Enrich Created Contact","type":"main","index":0}],[{"node":"Interaction Ambiguous","type":"main","index":0}]]},
+    "Interaction Ambiguous": {"main":[[{"node":"Respond Interaction Recoverable","type":"main","index":0}],[{"node":"Persist CRM Failure","type":"main","index":0}]]},
     "Store Recovery Context": {
       "main": [
         [

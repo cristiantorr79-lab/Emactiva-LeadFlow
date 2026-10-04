@@ -64,9 +64,9 @@ try:
     status, created, created_text = send(event_create, first_name="Ada", company="Persistent Company")
     execution_ids.append(created.get("execution_id", ""))
     check("D2-001 lead nuevo success", status == 200 and created.get("status") == "success" and created.get("crm_action") == "created")
-    created_row = psql(f"SELECT status||'|'||crm_action||'|'||enrichment_status||'|'||crm_contact_id FROM leadflow.executions WHERE execution_id='{created['execution_id']}';")
-    check("D2-002 success persistido", created_row.startswith("success|created|success|crm_"))
-    contact_id = created_row.rsplit("|", 1)[1]
+    created_row = psql(f"SELECT status||'|'||crm_action||'|'||enrichment_status||'|'||crm_contact_id||'|'||interaction_status FROM leadflow.executions WHERE execution_id='{created['execution_id']}';")
+    check("D2-002 success persistido", created_row.startswith("success|created|success|crm_") and created_row.endswith("|not_required"))
+    contact_id = created_row.split("|")[3]
     _, contact_created, _ = http(CRM + f"/crm/contacts/{contact_id}")
     check("D2-003 contacto y enrichment", contact_created.get("contact", {}).get("company") == "Persistent Company" and contact_created.get("contact", {}).get("industry") == "software")
 
@@ -88,6 +88,7 @@ try:
 
     _, stats_after, _ = http(CRM + "/stats")
     check("D2-009 dos eventos un contacto", stats_after.get("contacts") == stats_before.get("contacts", 0) + 1)
+    check("D2-009A V1 no crea interactions", stats_after.get("interactions", 0) == stats_before.get("interactions", 0))
     public = " ".join((created_text, updated_text, duplicate_text))
     check("D2-010 respuesta pública sanitizada", all(value not in public for value in (email, "Ada", "Grace", "Persistent Company", KEY)))
 finally:

@@ -13,8 +13,8 @@ except ModuleNotFoundError:
 
 ALLOWED_ENRICHMENT={"industry","company_size","website"}
 TEMPORARY_STATUSES={408,429,500,502,503,504}
-HUBSPOT_CAPABILITIES={"consistent_lookup_after_create":False,"unique_email":False,"idempotent_create_operation_key":False,"conflict_reconciliation":True}
-ADAPTER_OPERATIONS={"crm.process","crm.update_enrichment","enrichment.enrich","alert.send","crm.capabilities"}
+HUBSPOT_CAPABILITIES={"consistent_lookup_after_create":False,"unique_email":False,"idempotent_create_operation_key":False,"conflict_reconciliation":True,"interaction_write":False,"interaction_idempotency":False,"interaction_reconciliation":False}
+ADAPTER_OPERATIONS={"crm.process","crm.update_enrichment","crm.record_interaction","crm.reconcile_interaction","enrichment.enrich","alert.send","crm.capabilities"}
 TECHNICAL_CODE=re.compile(r"^[a-z][a-z0-9_-]{0,99}$")
 OPAQUE_ID=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 TEXT_LIMITS={"industry":200,"company_size":100}
@@ -49,8 +49,12 @@ def load_config(env=os.environ):
    "unique_email":boolean("CRM_CAP_UNIQUE_EMAIL"),
    "idempotent_create_operation_key":boolean("CRM_CAP_IDEMPOTENT_CREATE_OPERATION_KEY"),
    "conflict_reconciliation":boolean("CRM_CAP_CONFLICT_RECONCILIATION"),
+   "interaction_write":boolean("CRM_CAP_INTERACTION_WRITE"),
+   "interaction_idempotency":boolean("CRM_CAP_INTERACTION_IDEMPOTENCY"),
+   "interaction_reconciliation":boolean("CRM_CAP_INTERACTION_RECONCILIATION"),
   },
  }
+ if crm_provider=="hubspot": config["capabilities"].update(interaction_write=False,interaction_idempotency=False,interaction_reconciliation=False)
  service_key=str(env.get("ADAPTER_SERVICE_KEY", ""))
  if len(service_key)<32 or any(char in service_key for char in "\r\n\0"): raise ValueError("missing or invalid ADAPTER_SERVICE_KEY")
  allowed_operations={item.strip() for item in str(env.get("ADAPTER_ALLOWED_OPERATIONS", "")).split(",") if item.strip()}
@@ -130,6 +134,22 @@ def request_with_retry(method,base,path,body,operation=None):
 
 def safe_ambiguous_create_retry(capabilities):
  return bool(capabilities.get("idempotent_create_operation_key") or (capabilities.get("consistent_lookup_after_create") and capabilities.get("unique_email")))
+
+def interaction_capable(capabilities):
+ return all(capabilities.get(name) for name in ("interaction_write","interaction_idempotency","interaction_reconciliation"))
+
+def valid_interaction(value):
+ if not isinstance(value,dict) or not value or set(value)-{"interest","message"}: return None
+ result={}
+ for name,limit in (("interest",100),("message",2000)):
+  item=value.get(name)
+  if item is not None:
+   if not isinstance(item,str): return None
+   item=item.strip()
+   if item:
+    if len(item)>limit: return None
+    result[name]=item
+ return result or None
 
 def filter_enrichment_fields(fields):
  if not isinstance(fields,dict): return {}
@@ -230,6 +250,33 @@ def crm_process(payload):
   if not retryable(status) or attempt==CONFIG["attempts"]: return failure("crm_create",status,retries+attempt-1,headers,code="ambiguous_create" if status==0 else None,ambiguous=status==0)
   wait(headers,status,attempt)
 
+def record_interaction(payload):
+ contact_id=opaque_id(payload.get("contact_id")); operation_key=opaque_id(payload.get("operation_key")); interaction=valid_interaction(payload.get("interaction"))
+ if not contact_id or not operation_key or interaction is None: return failure("crm_interaction",400,0,code="invalid_interaction")
+ if not interaction_capable(CONFIG["capabilities"]): return failure("crm_interaction",403,0,code="interaction_capability_missing")
+ if CONFIG["crm_provider"]!="mock": return failure("crm_interaction",403,0,code="interaction_capability_missing")
+ for attempt in range(1,CONFIG["attempts"]+1):
+  status,headers,body=call("POST",CONFIG["crm"]+"/crm/interactions",{"contact_id":contact_id,"interaction":interaction,"operation_key":operation_key})
+  if 200<=status<300:
+   interaction_id=opaque_id(body.get("interaction_id")) if isinstance(body,dict) else None
+   if interaction_id: return {"success":True,"interaction_id":interaction_id,"resolution":"created" if body.get("created") else "reused","retry_count":attempt-1}
+   status=422
+  if status==0:
+   return failure("crm_interaction",0,attempt-1,headers,code="ambiguous_interaction",ambiguous=True)
+  if not retryable(status) or attempt==CONFIG["attempts"]: return failure("crm_interaction",status,attempt-1,headers)
+  wait(headers,status,attempt)
+
+def reconcile_interaction(payload):
+ operation_key=opaque_id(payload.get("operation_key"))
+ if not operation_key: return failure("crm_interaction",400,0,code="invalid_operation_key")
+ if not CONFIG["capabilities"].get("interaction_reconciliation") or CONFIG["crm_provider"]!="mock": return failure("crm_interaction",403,0,code="interaction_reconciliation_missing")
+ status,headers,body=call("POST",CONFIG["crm"]+"/crm/interactions/reconcile",{"operation_key":operation_key})
+ if status==200 and isinstance(body,dict) and isinstance(body.get("found"),bool):
+  interaction_id=opaque_id(body.get("interaction_id")) if body.get("found") else None
+  if not body.get("found") or interaction_id: return {"success":True,"found":body["found"],"absence_conclusive":body.get("absence_conclusive") is True,"interaction_id":interaction_id,"retry_count":0}
+  status=422
+ return failure("crm_interaction",status,0,headers)
+
 def enrich(payload):
  last=(0,{},{}); request_body={key:payload[key] for key in ("email","company") if payload.get(key)}
  for attempt in range(1,CONFIG["attempts"]+1):
@@ -267,12 +314,14 @@ class Handler(BaseHTTPRequestHandler):
    profile=dict(CONFIG["capabilities"]); profile["safe_ambiguous_create_retry"]=safe_ambiguous_create_retry(profile); self.respond(200,profile)
   else: self.respond(404,{"error":canonical_error(404)})
  def do_POST(self):
-  operations={"/crm/process":"crm.process","/enrichment/enrich":"enrichment.enrich","/alert":"alert.send"}
+  operations={"/crm/process":"crm.process","/crm/record-interaction":"crm.record_interaction","/crm/reconcile-interaction":"crm.reconcile_interaction","/enrichment/enrich":"enrichment.enrich","/alert":"alert.send"}
   operation=operations.get(self.path)
   if operation is not None and not self.authorize(operation): return
   payload=self.payload()
   if payload is None: return self.respond(400,{"error":canonical_error(400)})
   if self.path=="/crm/process": result=crm_process(payload)
+  elif self.path=="/crm/record-interaction": result=record_interaction(payload)
+  elif self.path=="/crm/reconcile-interaction": result=reconcile_interaction(payload)
   elif self.path=="/enrichment/enrich": result=enrich(payload)
   elif self.path=="/alert":
    allowed={"execution_id","stage","error_code"}

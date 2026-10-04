@@ -83,3 +83,8 @@ LeadFlow emite eventos operacionales JSON con nivel y salida configurables. La a
 El core consume adaptadores por endpoints configurados, los secretos permanecen fuera de Git y producción usa un override sin puertos locales publicados. Los volúmenes persistentes son `leadflow_postgres_data` y `leadflow_n8n_data`; el contrato de backup está en `config/backup-policy.json` y exige reaplicar el estado DSR tras restore. Cambiar de entorno se resuelve mediante variables y overrides, sin modificar el core.
 
 Permanecen **HYBRID/ENVIRONMENT** y no verificados hasta un despliegue real: red, DNS, dominio, TLS, firewall, IAM, almacenamiento y volúmenes efectivos, cifrado de host/storage, backup/restore ejecutados, monitoreo y separación dev/test/prod desplegada.
+# LF-008: Event, Lead e Interaction
+
+LeadFlow mantiene tres identidades separadas. `event_id` + `source` identifica el envío técnico y conserva la clave histórica `SHA-256(source + ":" + event_id)`; el email normalizado identifica el contacto; `interaction` contiene únicamente el contexto opcional del contacto actual. El contacto CRM se confirma localmente antes de escribir la interacción y esta usa `<idempotency_key>:crm_interaction`, sin PII.
+
+La interacción se ejecuta antes de enrichment. El adapter expone capacidades independientes de escritura, idempotencia y reconciliación; si falta alguna, el core falla cerrado antes del primer efecto CRM. Un resultado ambiguo deja la ejecución no terminal, cifra el contexto JSON mínimo en `recovery_contexts` y obliga a reconciliar antes de repetir. El contenido temporal se elimina por el trigger terminal, DSR DELETE o expiración de recovery.

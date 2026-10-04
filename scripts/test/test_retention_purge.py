@@ -8,7 +8,8 @@ import sys
 
 
 ROOT=Path(__file__).resolve().parents[2]
-ADMIN=os.environ["POSTGRES_MIGRATOR_USER"]
+BOOTSTRAP=os.environ["POSTGRES_BOOTSTRAP_USER"]
+MIGRATOR=os.environ["POSTGRES_MIGRATOR_USER"]
 BASE_DB=os.environ["POSTGRES_DB"]
 TEST_DB="leadflow_retention_"+secrets.token_hex(4)
 PREFIX="rem12_"+secrets.token_hex(5)
@@ -16,9 +17,18 @@ CANARY="synthetic-person@example.test"
 checks={}
 
 
-def run(sql,database=TEST_DB,check_result=True):
- command=["docker","compose","exec","-T","postgres","psql","-X","-q","-v","ON_ERROR_STOP=1","-U",ADMIN,"-d",database,"-At"]
- result=subprocess.run(command,cwd=ROOT,input=sql,text=True,capture_output=True,check=False)
+def run(sql,database=TEST_DB,check_result=True,user=MIGRATOR):
+ command=["docker","compose","exec","-T","postgres","psql","-X","-q","-v","ON_ERROR_STOP=1","-U",user,"-d",database,"-At"]
+ result=subprocess.run(
+  command,
+  cwd=ROOT,
+  input=sql,
+  text=True,
+  encoding="utf-8",
+  errors="replace",
+  capture_output=True,
+  check=False
+ )
  if check_result and result.returncode: raise AssertionError("database operation failed")
  return result
 
@@ -46,14 +56,17 @@ def processing(label,age_days,context=False):
  idem=hashlib.sha256((PREFIX+label).encode()).hexdigest()
  run(f"INSERT INTO leadflow.executions(execution_id,idempotency_key,source,lead_identifier,status,stage,updated_at) VALUES({q(execution)},{q(idem)},'website','{'d'*64}','processing','idempotency',clock_timestamp()-interval '{age_days} days');")
  run(f"INSERT INTO leadflow.execution_events(execution_id,status,stage) VALUES({q(execution)},'processing','idempotency');")
- if context: run(f"INSERT INTO leadflow.recovery_contexts(execution_id,email_ciphertext,created_at) VALUES({q(execution)},decode('00','hex'),clock_timestamp()-interval '{age_days} days');")
+ if context: run(f"INSERT INTO leadflow.recovery_contexts(execution_id,context_ciphertext,created_at) VALUES({q(execution)},decode('00','hex'),clock_timestamp()-interval '{age_days} days');")
  return execution
 
 
 try:
- run(f'CREATE DATABASE "{TEST_DB}";',BASE_DB)
- for migration in sorted((ROOT/"database"/"migrations").glob("*.sql")):
-  run(migration.read_text(encoding="utf-8"))
+ run(f'CREATE DATABASE "{TEST_DB}";',BASE_DB,user=BOOTSTRAP)
+ migrations=sorted((ROOT/"database"/"migrations").glob("*.sql"))
+ run(migrations[0].read_text(encoding="utf-8"),user=BOOTSTRAP)
+ run((ROOT/"scripts"/"database"/"transfer_leadflow_ownership.sql").read_text(encoding="utf-8"),user=BOOTSTRAP)
+ for migration in migrations[1:]:
+  run(migration.read_text(encoding="utf-8"),user=MIGRATOR)
 
  success_recent=terminal("success_recent","success",89)
  success_old=terminal("success_old","success",91)
@@ -92,7 +105,7 @@ try:
  evidence=scalar("SELECT processing_terminalized||'|'||execution_events_deleted||'|'||recovery_contexts_deleted||'|'||executions_deleted||'|'||evidence_rows_pruned FROM leadflow.retention_purge_runs ORDER BY completed_at;")
  check("REM12-12 minimized count-only evidence",evidence_columns=="run_id,completed_at,processing_terminalized,execution_events_deleted,recovery_contexts_deleted,executions_deleted,evidence_rows_pruned" and CANARY not in first+second+evidence)
 finally:
- run(f'DROP DATABASE IF EXISTS "{TEST_DB}" WITH (FORCE);',BASE_DB,False)
+ run(f'DROP DATABASE IF EXISTS "{TEST_DB}" WITH (FORCE);',BASE_DB,False,user=BOOTSTRAP)
 
 failed=[name for name,value in checks.items() if not value]
 print(f"RESULT: {'FAIL' if failed else 'PASS'}; passed={sum(checks.values())}/{len(checks)}")

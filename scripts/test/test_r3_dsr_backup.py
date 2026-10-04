@@ -1,10 +1,13 @@
 """Integrated focused R3 battery for REM-13, REM-14 and REM-15."""
 from pathlib import Path
 import hashlib,hmac,importlib.util,json,os,secrets,subprocess,sys
-ROOT=Path(__file__).resolve().parents[2]; ADMIN=os.environ["POSTGRES_MIGRATOR_USER"]; BASE=os.environ["POSTGRES_DB"]
+ROOT=Path(__file__).resolve().parents[2]; BOOTSTRAP=os.environ["POSTGRES_BOOTSTRAP_USER"]; MIGRATOR=os.environ["POSTGRES_MIGRATOR_USER"]; BASE=os.environ["POSTGRES_DB"]
 DB="leadflow_r3_"+secrets.token_hex(4); PREFIX="r3_"+secrets.token_hex(4); SECRET="r3-synthetic-subject-key-at-least-32"; checks={}
-def run(sql,database=DB,ok=True):
- result=subprocess.run(["docker","compose","exec","-T","postgres","psql","-X","-q","-v","ON_ERROR_STOP=1","-U",ADMIN,"-d",database,"-At"],cwd=ROOT,input=sql,text=True,capture_output=True)
+def run(sql,database=DB,ok=True,user=MIGRATOR):
+ result=subprocess.run(
+  ["docker","compose","exec","-T","postgres","psql","-X","-q","-v","ON_ERROR_STOP=1","-U",user,"-d",database,"-At"],
+  cwd=ROOT,input=sql,text=True,encoding="utf-8",errors="replace",capture_output=True
+ )
  if ok and result.returncode: raise AssertionError("database operation failed")
  return result
 def scalar(sql): return run(sql).stdout.strip()
@@ -18,8 +21,12 @@ def fixture(label,email,crm="crm_one"):
 def execute(request_id,action,lead,token,approver=None,annotation=None,ok=True): return run(f"SELECT * FROM leadflow.execute_dsr_request({q(request_id)},{q(action)},{q(lead)},{q(token)},'dsr_operator',{q(approver)},{q(annotation)});",ok=ok)
 def check(name,value): checks[name]=bool(value); print(("PASS" if value else "FAIL")+" "+name)
 try:
- run(f'CREATE DATABASE "{DB}";',BASE)
- for migration in sorted((ROOT/"database"/"migrations").glob("*.sql")): run(migration.read_text(encoding="utf-8"))
+ run(f'CREATE DATABASE "{DB}";',BASE,user=BOOTSTRAP)
+ migrations=sorted((ROOT/"database"/"migrations").glob("*.sql"))
+ run(migrations[0].read_text(encoding="utf-8"),user=BOOTSTRAP)
+ run((ROOT/"scripts"/"database"/"transfer_leadflow_ownership.sql").read_text(encoding="utf-8"),user=BOOTSTRAP)
+ for migration in migrations[1:]:
+  run(migration.read_text(encoding="utf-8"),user=MIGRATOR)
  lead,token,execution=fixture("subject","subject-one@example.test")
  locate=execute(PREFIX+"_locate","locate",lead,token).stdout.strip().split("|")
  check("R3-01 locate existing",locate[4]=="1" and locate[2]=="completed")
@@ -54,5 +61,5 @@ try:
  check("R3-19 RPO RTO retention defined",policy["retention_days"]==30 and policy["rpo_hours"]<=24 and policy["rto_hours"]<=8 and policy["frequency_hours"]==24)
  runbook=(ROOT/"docs"/"runbooks"/"BACKUP_RESTORE.md").read_text(encoding="utf-8"); check("R3-20 restore reapplies DSR state",policy["restore_requires_dsr_replay"] and "dsr_tombstones" in runbook and "restricted" in runbook)
  check("R3-21 environment remains unverified",all(value in {"NOT_VERIFIED","HYBRID"} for value in policy["environment_controls"].values()))
-finally: run(f'DROP DATABASE IF EXISTS "{DB}" WITH (FORCE);',BASE,False)
+finally: run(f'DROP DATABASE IF EXISTS "{DB}" WITH (FORCE);',BASE,False,user=BOOTSTRAP)
 failed=[name for name,value in checks.items() if not value]; print(f"RESULT: {'FAIL' if failed else 'PASS'}; passed={sum(checks.values())}/{len(checks)}"); sys.exit(1 if failed else 0)

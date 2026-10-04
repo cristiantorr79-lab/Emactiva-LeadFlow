@@ -22,7 +22,7 @@ def fixture(label,email,stage='idempotency',lease_worker=None,lease_expired=Fals
  owner='NULL' if lease_worker is None else "'%s'"%lease_worker; lease='NULL' if lease_worker is None else ("clock_timestamp()-interval '1 second'" if lease_expired else "clock_timestamp()+interval '5 minutes'")
  age="20 years" if label in {'concurrent','expired'} else "2 minutes"
  psql(f"INSERT INTO leadflow.executions(execution_id,idempotency_key,source,lead_identifier,status,stage,updated_at,recovery_owner,recovery_lease_until) VALUES('{execution}','{idem}','website','{lead}','processing','{stage}',clock_timestamp()-interval '{age}',{owner},{lease});")
- psql(f"SELECT leadflow.store_recovery_context('{execution}','{email}','{os.environ['RECOVERY_CONTEXT_KEY']}');",True)
+ psql(f"SELECT leadflow.store_recovery_context('{execution}','{email}',NULL,'{os.environ['RECOVERY_CONTEXT_KEY']}');",True)
  return execution,idem
 def claim(worker): return psql(f"SELECT execution_id FROM leadflow.claim_stale_processing_executions('{worker}',60,300,1);",True)
 def check(name,value): checks[name]=bool(value); print(('PASS' if value else 'FAIL')+' '+name)

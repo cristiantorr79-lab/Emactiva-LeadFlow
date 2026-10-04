@@ -357,3 +357,12 @@ Si fue utilizado:
 
 **Handoff completado:** Sí / No  
 **Implementación cerrada:** Sí / No
+## Preflight LF-008 — interactions
+
+- Allowlist exacta de `interest`:
+- ¿Se habilita `message` libre?:
+- Representación de la interacción en el CRM:
+- Idempotencia efectiva por operation key:
+- Reconciliación concluyente y semántica de ausencia:
+- Retención y proceso DSR del CRM:
+- Capabilities verificadas: `interaction_write`, `interaction_idempotency`, `interaction_reconciliation`.

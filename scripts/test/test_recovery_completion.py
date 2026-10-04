@@ -20,7 +20,7 @@ def request(base,path,payload=None,method='GET'):
 def fixture(label,email,worker,existing=False):
  execution='lf_exec_'+secrets.token_hex(16); created.append(execution); idem=hashlib.sha256(f'website:{prefix}_{label}'.encode()).hexdigest(); lead=hashlib.sha256(email.encode()).hexdigest()
  psql(f"INSERT INTO leadflow.executions(execution_id,idempotency_key,source,lead_identifier,status,stage,updated_at,recovery_owner,recovery_lease_until) VALUES('{execution}','{idem}','website','{lead}','processing','idempotency',clock_timestamp()-interval '1 hour','{worker}',clock_timestamp()+interval '30 minutes');")
- psql(f"SELECT leadflow.store_recovery_context('{execution}','{email}','{SECRET}');",True)
+ psql(f"SELECT leadflow.store_recovery_context('{execution}','{email}',NULL,'{SECRET}');",True)
  if existing: request(CRM,'/crm/contacts',{'lead':{'email':email},'operation_key':prefix+':seed:'+label},'POST')
  reconciled=reconcile(execution,worker,ADAPTER)
  return execution,idem,reconciled

@@ -1,7 +1,7 @@
 """Continue leased recovery through canonical enrichment, CRM and alert adapters."""
 from urllib.error import HTTPError,URLError
 from urllib.request import Request,urlopen
-import argparse,json,os,re,sys
+import argparse,base64,json,os,re,sys
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -38,11 +38,31 @@ def continue_recovery(execution_id,worker_id,adapter_url=None):
   return {'execution_id':execution_id,'status':'failed','retry_count':0,'alert_sent':None,'error_type':'timeout','error_code':'recovery_expired'}
  total_retry=0
  try:
-  context=psql("SELECT execution_id||'|'||coalesce(crm_contact_id,'')||'|'||retry_count||'|'||normalized_email FROM leadflow.get_recovery_crm_context(%s,%s,%s);"%(sql_text(execution_id),sql_text(worker_id),sql_text(secret)))
+  context=psql("SELECT execution_id||'|'||coalesce(crm_contact_id,'')||'|'||retry_count||'|'||normalized_email||'|'||encode(convert_to(coalesce(interaction,'null'::jsonb)::text,'UTF8'),'base64')||'|'||interaction_status||'|'||coalesce(crm_interaction_id,'') FROM leadflow.get_recovery_crm_context(%s,%s,%s);"%(sql_text(execution_id),sql_text(worker_id),sql_text(secret)))
   if not context: raise RuntimeError('recovery_context_unavailable')
-  _,contact_id,retry_text,email=context.split('|',3)
+  _,contact_id,retry_text,email,interaction_encoded,interaction_state,interaction_id=context.split('|',6)
   if not re.fullmatch(r'[A-Za-z0-9_-]{1,200}',contact_id): raise RuntimeError('recovery_reconciliation_incomplete')
   base=adapter_base(adapter_url); base_retry=int(retry_text)
+  interaction=json.loads(base64.b64decode(interaction_encoded).decode('utf-8'))
+  if interaction is not None and interaction_state!='confirmed':
+   operation_key=psql("SELECT idempotency_key FROM leadflow.executions WHERE execution_id=%s;"%sql_text(execution_id))+':crm_interaction'
+   if interaction_state=='ambiguous':
+    reconcile_status,reconciled=http(base+'/crm/reconcile-interaction',{'operation_key':operation_key})
+    if reconcile_status!=200 or reconciled.get('success') is not True or (not reconciled.get('found') and not reconciled.get('absence_conclusive')):
+     return {'execution_id':execution_id,'status':'processing','retry_count':base_retry,'error_type':'ambiguous_interaction','error_code':'ambiguous_interaction'}
+    if reconciled.get('found'):
+     interaction_id=reconciled.get('interaction_id')
+   if not interaction_id:
+    interaction_status,written=http(base+'/crm/record-interaction',{'contact_id':contact_id,'interaction':interaction,'operation_key':operation_key})
+    used=written.get('retry_count',0) if isinstance(written,dict) else 0; base_retry+=used if isinstance(used,int) else 0
+    if interaction_status!=200 or written.get('success') is not True:
+     if written.get('ambiguous') is True:
+      psql("SELECT leadflow.record_interaction_outcome(%s,false,NULL,%d,true);"%(sql_text(execution_id),base_retry))
+      return {'execution_id':execution_id,'status':'processing','retry_count':base_retry,'error_type':'ambiguous_interaction','error_code':'ambiguous_interaction'}
+     return terminal_failure(execution_id,worker_id,base_retry)
+    interaction_id=written.get('interaction_id')
+   if not isinstance(interaction_id,str) or not re.fullmatch(r'[A-Za-z0-9._:-]{1,200}',interaction_id): raise RuntimeError('invalid_interaction_response')
+   psql("SELECT leadflow.record_interaction_outcome(%s,true,%s,%d,false);"%(sql_text(execution_id),sql_text(interaction_id),base_retry))
   status,enriched=http(base+'/enrichment/enrich',{'email':email})
   success=status==200 and enriched.get('success') is True
   adapter_retries=enriched.get('retry_count',0) if isinstance(enriched,dict) else 0
