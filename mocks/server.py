@@ -74,7 +74,14 @@ class Handler(BaseHTTPRequestHandler):
             visible_fields = ("id", "first_name", "last_name", "email", "company")
             with lock:
                 result = [
-                    {name: contact[name] for name in visible_fields if name in contact}
+                    {
+                        **{name: contact[name] for name in visible_fields if name in contact},
+                        "interactions": [
+                            dict(interaction)
+                            for _, interaction in sorted(interactions.items())
+                            if interaction.get("contact_id") == contact.get("id")
+                        ],
+                    }
                     for _, contact in sorted(contacts.items())
                 ]
             self.respond(200, {"contacts": result})

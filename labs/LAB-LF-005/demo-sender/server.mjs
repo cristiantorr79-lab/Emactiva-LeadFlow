@@ -16,6 +16,8 @@ export function sanitizeResult(statusCode, value) {
   const input = value && typeof value === 'object' ? value : {};
   const status = input.status === 'duplicate' || input.duplicate === true
     ? 'duplicate'
+    : statusCode === 202 && input.status === 'processing' && input.recoverable === true && input.error?.type === 'ambiguous_interaction'
+      ? 'processing'
     : input.status === 'success' || input.ok === true
       ? 'success'
       : 'error';
@@ -24,6 +26,10 @@ export function sanitizeResult(statusCode, value) {
   if (input.crm_action === 'created' || input.crm_action === 'updated') result.crm_action = input.crm_action;
   if (status === 'duplicate' && typeof input.original_execution_id === 'string') {
     result.original_execution_id = input.original_execution_id.slice(0, 200);
+  }
+  if (status === 'processing') {
+    result.recoverable = true;
+    result.message = 'LeadFlow está confirmando la interacción. El proceso puede recuperarse de forma segura.';
   }
   if (status === 'error') {
     result.ok = false;
@@ -35,15 +41,22 @@ export function sanitizeResult(statusCode, value) {
 function sanitizeContacts(value) {
   const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
   const fields = ['id', 'first_name', 'last_name', 'email', 'company'];
-  return contacts.slice(0, 100).map((contact) => Object.fromEntries(
-    fields
+  return contacts.slice(0, 100).map((contact) => {
+    const sanitized = Object.fromEntries(fields
       .filter((field) => typeof contact?.[field] === 'string')
       .map((field) => [field, contact[field].slice(0, field === 'email' ? 254 : 200)])
-  ));
+    );
+    sanitized.interactions = (Array.isArray(contact?.interactions) ? contact.interactions : []).slice(0, 100).map((interaction) => Object.fromEntries(
+      ['interest', 'message']
+        .filter((field) => typeof interaction?.[field] === 'string')
+        .map((field) => [field, interaction[field].slice(0, field === 'interest' ? 100 : 2000)])
+    )).filter((interaction) => Object.keys(interaction).length > 0);
+    return sanitized;
+  });
 }
 
-function validLead(body) {
-  return body && typeof body === 'object'
+function normalizeDemoPayload(body, allowedInterests) {
+  if (!(body && typeof body === 'object' && !Array.isArray(body)
     && typeof body.event_id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.event_id)
     && /[0-9._:-]/.test(body.event_id)
     && !/^\d+$/.test(body.event_id)
@@ -53,7 +66,27 @@ function validLead(body) {
     && typeof body.lead.email === 'string' && body.lead.email.length <= 254
     && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.lead.email)
     && typeof body.lead.company === 'string' && body.lead.company.length > 0 && body.lead.company.length <= 200
-    && ['first_name', 'last_name', 'company'].every((key) => body.lead[key] === undefined || (typeof body.lead[key] === 'string' && body.lead[key].length <= 200));
+    && ['first_name', 'last_name', 'company'].every((key) => body.lead[key] === undefined || (typeof body.lead[key] === 'string' && body.lead[key].length <= 200)))) return null;
+  if (body.interaction === undefined) return body;
+  if (!body.interaction || typeof body.interaction !== 'object' || Array.isArray(body.interaction)) return null;
+  const interaction = {};
+  for (const field of ['interest', 'message']) {
+    if (body.interaction[field] === undefined) continue;
+    if (typeof body.interaction[field] !== 'string') return null;
+    const value = body.interaction[field].trim();
+    if (value.length > (field === 'interest' ? 100 : 2000)) return null;
+    if (value) interaction[field] = value;
+  }
+  if (interaction.interest && !allowedInterests.includes(interaction.interest)) return null;
+  const normalized = { ...body };
+  if (Object.keys(interaction).length) normalized.interaction = interaction;
+  else delete normalized.interaction;
+  return normalized;
+}
+
+function parseAllowedInterests(value) {
+  const items = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',') : [];
+  return [...new Set(items.map((item) => typeof item === 'string' ? item.trim() : '').filter((item) => item && item.length <= 100))];
 }
 
 async function readJson(req) {
@@ -72,11 +105,13 @@ export function createDemoServer(config) {
   const crmTarget = new URL(config.crmUrl ?? 'http://127.0.0.1:5683/crm/contacts');
   if (!['http:', 'https:'].includes(crmTarget.protocol)) throw new Error('DEMO_CRM_URL must use http or https');
 
+  const allowedInterests = parseAllowedInterests(config.allowedInterests);
+
   return createServer(async (req, res) => {
     try {
       if (req.method === 'POST' && req.url === '/api/send') {
-        const body = await readJson(req);
-        if (!validLead(body)) return json(res, 400, { ok: false, status: 'error', message: 'Revisa los campos requeridos.' });
+        const body = normalizeDemoPayload(await readJson(req), allowedInterests);
+        if (!body) return json(res, 400, { ok: false, status: 'error', message: 'Revisa los campos requeridos.' });
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 20_000);
         try {
@@ -88,10 +123,14 @@ export function createDemoServer(config) {
           });
           let value = {};
           try { value = await upstream.json(); } catch { value = {}; }
-          return json(res, upstream.ok ? 200 : 502, sanitizeResult(upstream.status, value));
+          return json(res, upstream.ok ? upstream.status : 502, sanitizeResult(upstream.status, value));
         } finally {
           clearTimeout(timer);
         }
+      }
+
+      if (req.method === 'GET' && req.url === '/api/config') {
+        return json(res, 200, { ok: true, allowed_interests: allowedInterests });
       }
 
       if (req.method === 'GET' && req.url === '/api/crm/contacts') {
@@ -127,6 +166,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     webhookUrl: process.env.DEMO_WEBHOOK_URL,
     webhookKey: process.env.DEMO_WEBHOOK_KEY,
     crmUrl: process.env.DEMO_CRM_URL,
+    allowedInterests: process.env.DEMO_ALLOWED_INTERESTS ?? process.env.LEADFLOW_ALLOWED_INTERESTS,
     timeoutMs: 20_000
   });
   server.listen(port, host, () => console.log(`LeadFlow Demo Sender: http://${host}:${port}`));

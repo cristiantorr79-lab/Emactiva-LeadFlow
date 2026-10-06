@@ -19,7 +19,21 @@ function contactCard(contact) {
   const details = document.createElement('dl');
   detail(details, 'Email', contact.email);
   detail(details, 'Empresa (Company)', contact.company);
-  card.append(text('p', 'Contacto registrado (Contact registered)', 'status'), text('h3', fullName, 'name'), details);
+  const interactions = Array.isArray(contact.interactions) ? contact.interactions : [];
+  const interactionSection = document.createElement('section');
+  interactionSection.className = 'interactions';
+  interactionSection.append(text('h4', `Interacciones (${interactions.length})`));
+  if (interactions.length === 0) interactionSection.append(text('p', 'Sin interacciones registradas.', 'no-interactions'));
+  interactions.forEach((interaction, index) => {
+    const item = document.createElement('article');
+    item.className = 'interaction';
+    const interactionDetails = document.createElement('dl');
+    detail(interactionDetails, 'Interés (Interest)', interaction.interest);
+    detail(interactionDetails, 'Mensaje (Message)', interaction.message);
+    item.append(text('h5', `Interaction ${index + 1}`), interactionDetails);
+    interactionSection.append(item);
+  });
+  card.append(text('p', 'Contacto registrado (Contact registered)', 'status'), text('h3', fullName, 'name'), details, interactionSection);
   return card;
 }
 

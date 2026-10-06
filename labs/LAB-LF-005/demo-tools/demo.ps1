@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('status', 'prepare', 'cleanup')]
     [string]$Action,
@@ -33,7 +33,7 @@ function Read-MockStatus {
         Write-Output 'FAIL PostgreSQL: no accesible'
         $failed = $true
     }
-    if ($failed) { throw 'El entorno de demo no está listo.' }
+    if ($failed) { throw 'El entorno de demo no estÃ¡ listo.' }
 }
 
 switch ($Action) {
@@ -56,15 +56,15 @@ switch ($Action) {
         $enrichment = Invoke-RestMethod -Uri 'http://127.0.0.1:5682/stats' -TimeoutSec 3
         $slack = Invoke-RestMethod -Uri 'http://127.0.0.1:5684/stats' -TimeoutSec 3
         if ($crm.contacts -ne 0 -or $crm.calls.create -ne 0 -or $enrichment.calls.enrich -ne 0 -or $slack.alert_count -ne 0) {
-            throw 'Post-check FAIL: uno o más mocks no quedaron limpios.'
+            throw 'Post-check FAIL: uno o mÃ¡s mocks no quedaron limpios.'
         }
         Write-Output 'PASS prepare: solo los tres mocks autorizados fueron reiniciados y quedaron limpios.'
     }
     'cleanup' {
         if ($Session -notmatch '^[0-9]{8}-[a-f0-9]{6}$') {
-            throw 'Sesión inválida. Formato autorizado: YYYYMMDD-xxxxxx para event_id demo-lf005-<session>-<n>.'
+            throw 'Sesion invalida. Formato autorizado: YYYYMMDD-xxxxxx para event_id demo-lf009-<session>-<n>.'
         }
-        Write-Output "WARN cleanup solicitado para namespace demo-lf005-$Session-*"
-        throw 'Cleanup PostgreSQL bloqueado de forma segura: event_id no se persiste y no existe una relación demostrable session→execution_id. No se ejecutó DELETE. Use cleanup manual por execution_id explícitos hasta aprobar trazabilidad local de demo.'
+        Write-Output "WARN cleanup solicitado para namespace demo-lf009-$Session-*"
+        throw 'Cleanup PostgreSQL bloqueado de forma segura: event_id no se persiste y no existe una relacion demostrable session-to-execution_id. No se ejecuto DELETE. Use cleanup manual por execution_id explicitos hasta aprobar trazabilidad local de demo.'
     }
 }

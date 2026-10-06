@@ -10,7 +10,7 @@
   <main>
     <p class="eyebrow">Entorno de demostración (Demo environment)</p>
     <h1>Emactiva LeadFlow — Demo</h1>
-    <p class="intro">Vuelve a enviar el mismo lead para comprobar que LeadFlow evita procesarlo dos veces.<br><span lang="en">(Send the same lead again to verify that LeadFlow prevents duplicate processing.)</span></p>
+    <p class="intro">Gestiona contactos y nuevas consultas sin duplicar información ni repetir acciones.<br><span lang="en">(Manage contacts and new inquiries without duplicating information or repeating actions.)</span></p>
     <form id="lead-form">
       <label>Nombre (First name) <input name="first_name" required maxlength="200" autocomplete="off"></label>
       <label>Apellido (Last name) <input name="last_name" maxlength="200" autocomplete="off"></label>
@@ -18,6 +18,14 @@
       <label>Empresa (Company) <input name="company" required maxlength="200" autocomplete="off"></label>
       <label>Origen (Source) <input name="source" required maxlength="64" pattern="[a-z][a-z0-9_-]{0,63}" autocomplete="off"></label>
       <label>Identificador del evento (Event ID) <span class="row"><input name="event_id" required maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._:-]{0,127}" autocomplete="off"><button type="button" id="new-id" class="secondary">Nuevo (New)</button></span></label>
+      <fieldset>
+        <legend>Interacción opcional (Optional interaction)</legend>
+        <label>Interés (Interest)
+          <select name="interest" disabled><option value="">Sin interés (No interest)</option></select>
+        </label>
+        <label>Mensaje (Message) <textarea name="message" maxlength="2000" rows="5" autocomplete="off"></textarea></label>
+        <small id="interest-help">Cargando intereses permitidos…</small>
+      </fieldset>
       <button type="submit" id="send">Enviar lead (Send lead)</button>
     </form>
     <section id="result" class="result idle" aria-live="polite">

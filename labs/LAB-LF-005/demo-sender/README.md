@@ -12,19 +12,21 @@ En PowerShell, desde la raíz del repositorio:
 $env:DEMO_WEBHOOK_URL = 'http://127.0.0.1:5680/webhook/leadflow'
 $env:DEMO_WEBHOOK_KEY = '<clave-del-entorno-demo>'
 $env:DEMO_CRM_URL = 'http://127.0.0.1:5683/crm/contacts'
+$env:DEMO_ALLOWED_INTERESTS = 'producto_a'
 node .\labs\LAB-LF-005\demo-sender\server.mjs
 ```
 
-Abrir `http://127.0.0.1:8095`. La vista CRM de solo lectura está en `http://127.0.0.1:8095/crm`. `DEMO_PORT` y `DEMO_HOST` son opcionales; el host seguro por defecto es loopback. Las URLs y la clave se leen desde el entorno; `DEMO_CRM_URL` tiene como default seguro el CRM mock local mostrado arriba. La clave nunca se envía al navegador ni debe guardarse en este directorio.
+Abrir `http://127.0.0.1:8095`. La vista CRM de solo lectura está en `http://127.0.0.1:8095/crm`. `DEMO_PORT` y `DEMO_HOST` son opcionales; el host seguro por defecto es loopback. `DEMO_ALLOWED_INTERESTS` es una lista separada por comas exclusiva de la demo; si se omite, el Sender reutiliza `LEADFLOW_ALLOWED_INTERESTS`. Sin allowlist válida, el selector queda deshabilitado y cualquier `interest` recibido se rechaza cerrado; V1 y `message` siguen disponibles. Las URLs y la clave se leen desde el entorno. La clave nunca se envía al navegador ni debe guardarse en este directorio.
 
 ## Uso
 
-1. Confirmar que los valores son sintéticos; los defaults usan `example.com`.
-2. Pulsar **Enviar lead** y observar `success`, `execution_id` y `crm_action` si el runtime los devuelve.
-3. Pulsar nuevamente sin cambiar `source` ni `event_id` para observar `duplicate` sin efectos externos repetidos.
-4. Pulsar **Nuevo** antes de otro caso independiente.
+1. Confirmar datos sintéticos, seleccionar un interés permitido y escribir un mensaje sintético. Enviar para crear EVENT + LEAD + INTERACTION.
+2. Abrir CRM Demo View y comprobar un contacto con una interacción.
+3. Pulsar **Nuevo**: cambia solo `event_id`. Mantener el email, cambiar la interacción y enviar; el contacto se reutiliza y aparece una segunda interacción.
+4. Reenviar sin cambiar `source` ni `event_id`: el resultado es `duplicate` y el CRM permanece con un contacto y dos interacciones.
+5. Para comprobar compatibilidad V1, dejar interés y mensaje vacíos; el Sender omite por completo `interaction`.
 
-La interfaz solo muestra campos canónicos permitidos. No presenta headers, tokens, stack traces ni la respuesta interna completa.
+La interfaz solo muestra campos canónicos permitidos. Una respuesta HTTP 202 por interacción ambigua se presenta como confirmación recuperable en proceso, sin detalles internos. No se muestran headers, tokens, PII adicional, payloads, stack traces ni respuestas internas completas. Esta es una herramienta de demostración, no una UI productiva.
 
 ## Limpieza
 

@@ -6,7 +6,7 @@ let demoSequence = 0;
 
 function newEventId() {
   demoSequence += 1;
-  return `demo-lf005-${demoSession}-${demoSequence}`;
+  return `demo-lf009-${demoSession}-${demoSequence}`;
 }
 
 function resetDefaults() {
@@ -19,9 +19,9 @@ function resetDefaults() {
 }
 
 function show(data) {
-  const status = ['success', 'duplicate'].includes(data.status) ? data.status : 'error';
+  const status = ['success', 'duplicate', 'processing'].includes(data.status) ? data.status : 'error';
   result.className = `result ${status}`;
-  const headline = status === 'success' ? 'Lead procesado (Lead processed)' : status === 'duplicate' ? 'Duplicado detectado (Duplicate detected)' : 'Error controlado (Controlled error)';
+  const headline = status === 'success' ? 'Lead procesado (Lead processed)' : status === 'duplicate' ? 'Duplicado detectado (Duplicate detected)' : status === 'processing' ? 'Confirmación en proceso (Confirmation in progress)' : 'Error controlado (Controlled error)';
   const details = [];
   if (data.execution_id) details.push(`execution_id: ${data.execution_id}`);
   if (data.crm_action) details.push(`crm_action: ${data.crm_action}`);
@@ -31,6 +31,23 @@ function show(data) {
 }
 
 document.querySelector('#new-id').addEventListener('click', () => { form.elements.event_id.value = newEventId(); });
+
+async function loadAllowedInterests() {
+  const help = document.querySelector('#interest-help');
+  try {
+    const response = await fetch('/api/config', { headers: { accept: 'application/json' } });
+    const data = await response.json();
+    if (!response.ok || !data.ok || !Array.isArray(data.allowed_interests)) throw new Error('controlled_error');
+    const options = data.allowed_interests.map((value) => Object.assign(document.createElement('option'), { value, textContent: value }));
+    form.elements.interest.append(...options);
+    form.elements.interest.disabled = options.length === 0;
+    help.textContent = options.length ? 'Opcional; valores configurados para esta demo.' : 'Sin intereses configurados; la demo funciona en modo V1.';
+  } catch {
+    form.elements.interest.disabled = true;
+    help.textContent = 'Intereses no disponibles; la demo funciona en modo V1.';
+  }
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!form.reportValidity()) return;
@@ -40,11 +57,17 @@ form.addEventListener('submit', async (event) => {
   const values = Object.fromEntries(new FormData(form));
   const lead = { first_name: values.first_name, email: values.email, company: values.company };
   if (values.last_name) lead.last_name = values.last_name;
+  const interaction = {};
+  if (values.interest?.trim()) interaction.interest = values.interest.trim();
+  if (values.message?.trim()) interaction.message = values.message.trim();
+  const payload = { event_id: values.event_id, source: values.source, lead };
+  if (Object.keys(interaction).length) payload.interaction = interaction;
   try {
-    const response = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ event_id: values.event_id, source: values.source, lead }) });
+    const response = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
     show(await response.json());
   } catch { show({ status: 'error', message: 'No fue posible contactar el Demo Sender. (The Demo Sender could not be reached.)' }); }
   finally { send.disabled = false; }
 });
 
 resetDefaults();
+loadAllowedInterests();

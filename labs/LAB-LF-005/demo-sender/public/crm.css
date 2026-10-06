@@ -34,6 +34,12 @@ a:focus-visible { outline: 3px solid rgba(200, 121, 105, .35); outline-offset: 2
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 7px 14px; margin: 0; font-size: .86rem; }
 dt { color: var(--graphite-soft); font-weight: 650; }
 dd { min-width: 0; margin: 0; overflow-wrap: break-word; word-break: normal; }
+.interactions { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--soft); }
+.interactions h4 { margin: 0 0 12px; font-size: .95rem; }
+.interaction { margin-top: 10px; padding: 12px 14px; border-radius: 8px; background: #faf7f2; }
+.interaction h5 { margin: 0 0 9px; color: var(--accent-dark); font-size: .82rem; }
+.interaction dl { font-size: .8rem; }
+.no-interactions { margin: 0; color: var(--graphite-soft); font-size: .82rem; }
 .empty { grid-column: 1 / -1; align-self: center; margin: 0; padding: 28px; border: 1px dashed var(--border); border-radius: 10px; color: var(--graphite-soft); background: #faf7f2; text-align: center; line-height: 1.55; }
 .error { color: var(--accent-dark); }
 footer { margin-top: 28px; color: var(--graphite-soft); font-size: .76rem; text-align: center; }

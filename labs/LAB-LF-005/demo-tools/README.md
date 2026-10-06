@@ -12,7 +12,7 @@ Ejecutar desde la raíz del repositorio con PowerShell:
 
 - `status`: comprueba health y contadores de los tres mocks, además de accesibilidad básica de PostgreSQL. No ejecuta flujos ni muestra payloads o secretos.
 - `prepare`: reinicia exclusivamente `crm-mock`, `enrichment-mock` y `slack-mock`; después exige que sus contadores/datos estén limpios. No reinicia PostgreSQL ni n8n.
-- `cleanup`: valida el namespace reservado `demo-lf005-<YYYYMMDD-xxxxxx>-<n>`, pero actualmente **falla cerrado sin ejecutar DELETE**.
+- `cleanup`: valida el namespace reservado `demo-lf009-<YYYYMMDD-xxxxxx>-<n>`, pero actualmente **falla cerrado sin ejecutar DELETE**.
 
 ## Salvaguarda del cleanup
 
