@@ -7,7 +7,7 @@ spec=importlib.util.spec_from_file_location('adapter_provider',ROOT/'adapters'/'
 checks={}; calls=[]; waits=[]; HUB_KEY='synthetic-hub-key'; HUNTER_KEY='synthetic-hunter-key'; AUTH={'ADAPTER_SERVICE_KEY':'a'*32,'ADAPTER_ALLOWED_OPERATIONS':'crm.process,crm.update_enrichment,enrichment.enrich,alert.send,crm.capabilities'}
 def check(name,value): checks[name]=bool(value); print(('PASS' if value else 'FAIL')+' '+name)
 def config(crm='hubspot',enrichment='hunter'):
- env={**AUTH,'APP_ENV':'development','CRM_PROVIDER':crm,'ENRICHMENT_PROVIDER':enrichment,'CRM_UPSTREAM_URL':'http://hub.test','ENRICHMENT_UPSTREAM_URL':'http://hunter.test','CRM_API_KEY':HUB_KEY,'ENRICHMENT_API_KEY':HUNTER_KEY}
+ env={**AUTH,'APP_ENV':'development','CRM_PROVIDER':crm,'ENRICHMENT_PROVIDER':enrichment,'CRM_UPSTREAM_URL':'http://hub.test','ENRICHMENT_UPSTREAM_URL':'http://hunter.test','CRM_API_KEY':HUB_KEY,'ENRICHMENT_API_KEY':HUNTER_KEY,'HUBSPOT_TICKET_PIPELINE_ID':'pipeline-test','HUBSPOT_TICKET_STAGE_ID':'stage-test','HUBSPOT_TICKET_INTEREST_PROPERTY':'leadflow_interest'}
  adapter.CONFIG=adapter.load_config(env); calls.clear(); waits.clear()
 def scripted(items):
  calls.clear(); waits.clear(); sequence=list(items)
@@ -79,7 +79,7 @@ scripted([ok({'unexpected':{}})]); malformed=adapter.enrich({'email':'synthetic@
 check('HUNTER-014 invalid response',malformed.get('error_code')=='invalid_response')
 check('HUNTER-015 no key leakage',HUNTER_KEY not in str(enriched)+str(quota)+str(malformed))
 
-production={**AUTH,'APP_ENV':'production','CRM_PROVIDER':'hubspot','ENRICHMENT_PROVIDER':'hunter','CRM_UPSTREAM_URL':'https://api.hubapi.com','ENRICHMENT_UPSTREAM_URL':'https://api.hunter.io','ALERT_UPSTREAM_URL':'https://hooks.example.invalid','CRM_API_KEY':'synthetic','ENRICHMENT_API_KEY':'synthetic'}
+production={**AUTH,'APP_ENV':'production','CRM_PROVIDER':'hubspot','ENRICHMENT_PROVIDER':'hunter','CRM_UPSTREAM_URL':'https://api.hubapi.com','ENRICHMENT_UPSTREAM_URL':'https://api.hunter.io','ALERT_UPSTREAM_URL':'https://hooks.example.invalid','CRM_API_KEY':'synthetic','ENRICHMENT_API_KEY':'synthetic','HUBSPOT_TICKET_PIPELINE_ID':'pipeline-test','HUBSPOT_TICKET_STAGE_ID':'stage-test','HUBSPOT_TICKET_INTEREST_PROPERTY':'leadflow_interest'}
 check('CONFIG-001 production providers valid',adapter.load_config(production)['crm_provider']=='hubspot')
 for name,key in (('CONFIG-002 missing HubSpot key','CRM_API_KEY'),('CONFIG-003 missing Hunter key','ENRICHMENT_API_KEY')):
  try: adapter.load_config({k:v for k,v in production.items() if k!=key}); failed=False

@@ -13,7 +13,7 @@ except ModuleNotFoundError:
 
 ALLOWED_ENRICHMENT={"industry","company_size","website"}
 TEMPORARY_STATUSES={408,429,500,502,503,504}
-HUBSPOT_CAPABILITIES={"consistent_lookup_after_create":False,"unique_email":False,"idempotent_create_operation_key":False,"conflict_reconciliation":True,"interaction_write":False,"interaction_idempotency":False,"interaction_reconciliation":False}
+HUBSPOT_CAPABILITIES={"consistent_lookup_after_create":False,"unique_email":False,"idempotent_create_operation_key":False,"conflict_reconciliation":True,"interaction_write":True,"interaction_idempotency":True,"interaction_reconciliation":True}
 ADAPTER_OPERATIONS={"crm.process","crm.update_enrichment","crm.record_interaction","crm.reconcile_interaction","enrichment.enrich","alert.send","crm.capabilities"}
 TECHNICAL_CODE=re.compile(r"^[a-z][a-z0-9_-]{0,99}$")
 OPAQUE_ID=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
@@ -54,7 +54,6 @@ def load_config(env=os.environ):
    "interaction_reconciliation":boolean("CRM_CAP_INTERACTION_RECONCILIATION"),
   },
  }
- if crm_provider=="hubspot": config["capabilities"].update(interaction_write=False,interaction_idempotency=False,interaction_reconciliation=False)
  service_key=str(env.get("ADAPTER_SERVICE_KEY", ""))
  if len(service_key)<32 or any(char in service_key for char in "\r\n\0"): raise ValueError("missing or invalid ADAPTER_SERVICE_KEY")
  allowed_operations={item.strip() for item in str(env.get("ADAPTER_ALLOWED_OPERATIONS", "")).split(",") if item.strip()}
@@ -64,6 +63,12 @@ def load_config(env=os.environ):
  config.update(crm=env.get("CRM_UPSTREAM_URL",defaults["crm"] if app_env=="development" and crm_provider=="mock" else ""),enrichment=env.get("ENRICHMENT_UPSTREAM_URL",defaults["enrichment"] if app_env=="development" and enrichment_provider=="mock" else ""),alert=env.get("ALERT_UPSTREAM_URL",defaults["alert"] if app_env=="development" else ""),crm_api_key=env.get("CRM_API_KEY",""),enrichment_api_key=env.get("ENRICHMENT_API_KEY",""))
  config["hubspot_enrichment_properties"]={"industry":env.get("HUBSPOT_PROPERTY_INDUSTRY","industry"),"company_size":env.get("HUBSPOT_PROPERTY_COMPANY_SIZE","leadflow_company_size"),"website":env.get("HUBSPOT_PROPERTY_WEBSITE","website")}
  if not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*",value or "") for value in config["hubspot_enrichment_properties"].values()): raise ValueError("invalid HubSpot property mapping")
+ config["hubspot_interaction_properties"]={"key":env.get("HUBSPOT_INTERACTION_KEY_PROPERTY","leadflow_interaction_key"),"message":env.get("HUBSPOT_TICKET_MESSAGE_PROPERTY","content"),"interest":env.get("HUBSPOT_TICKET_INTEREST_PROPERTY","")}
+ interaction_properties=config["hubspot_interaction_properties"]
+ if crm_provider=="hubspot" and not all(re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*",value or "") for value in interaction_properties.values()): raise ValueError("missing or invalid HubSpot interaction property mapping")
+ config["hubspot_ticket_pipeline_id"]=str(env.get("HUBSPOT_TICKET_PIPELINE_ID","")).strip()
+ config["hubspot_ticket_stage_id"]=str(env.get("HUBSPOT_TICKET_STAGE_ID","")).strip()
+ if crm_provider=="hubspot" and (not opaque_config_value(config["hubspot_ticket_pipeline_id"]) or not opaque_config_value(config["hubspot_ticket_stage_id"])): raise ValueError("missing or invalid HubSpot ticket pipeline configuration")
  if not all(str(config[name]).startswith(("http://","https://")) for name in ("crm","enrichment","alert")): raise ValueError("invalid upstream URL")
  if crm_provider=="hubspot" and not config["crm_api_key"]: raise ValueError("missing CRM_API_KEY")
  if enrichment_provider=="hunter" and not config["enrichment_api_key"]: raise ValueError("missing ENRICHMENT_API_KEY")
@@ -73,6 +78,9 @@ def load_config(env=os.environ):
  return config
 
 CONFIG=None
+
+def opaque_config_value(value):
+ return isinstance(value,str) and bool(value) and len(value)<=200 and not any(ord(char)<33 or ord(char)>126 for char in value)
 
 def call(method,url,body=None,headers=None):
  data=None if body is None else json.dumps(body,separators=(",",":")).encode(); request_headers={"Content-Type":"application/json",**(headers or {})}
@@ -171,6 +179,36 @@ def hubspot_properties(fields,include_email=False):
  if include_email and isinstance((fields or {}).get("email"),str): properties["email"]=fields["email"]
  return properties
 
+def hubspot_interaction_lookup(operation_key):
+ property_name=CONFIG["hubspot_interaction_properties"]["key"]
+ payload={"filterGroups":[{"filters":[{"propertyName":property_name,"operator":"EQ","value":operation_key}]}],"properties":[property_name],"limit":2}
+ status,headers,body=call("POST",CONFIG["crm"]+"/crm/v3/objects/tickets/search",payload,hubspot_headers())
+ if status!=200: return status,headers,{}
+ results=body.get("results") if isinstance(body,dict) else None
+ if not isinstance(results,list) or len(results)>1: return 422,headers,{}
+ if not results: return 200,headers,{"found":False,"absence_conclusive":True}
+ ticket_id=opaque_id(results[0].get("id")) if isinstance(results[0],dict) else None
+ return (200,headers,{"found":True,"absence_conclusive":True,"interaction_id":ticket_id}) if ticket_id else (422,headers,{})
+
+def hubspot_interaction_create(interaction,operation_key):
+ mapping=CONFIG["hubspot_interaction_properties"]
+ properties={mapping["key"]:operation_key,"hs_pipeline":CONFIG["hubspot_ticket_pipeline_id"],"hs_pipeline_stage":CONFIG["hubspot_ticket_stage_id"],"subject":"LeadFlow interaction"}
+ if interaction.get("message"): properties[mapping["message"]]=interaction["message"]
+ if interaction.get("interest"): properties[mapping["interest"]]=interaction["interest"]
+ status,headers,body=call("POST",CONFIG["crm"]+"/crm/v3/objects/tickets",{"properties":properties},hubspot_headers())
+ if not 200<=status<300: return status,headers,{}
+ ticket_id=opaque_id(body.get("id")) if isinstance(body,dict) else None
+ return (status,headers,{"interaction_id":ticket_id}) if ticket_id else (422,headers,{})
+
+def hubspot_interaction_associate(ticket_id,contact_id):
+ return call("PUT",CONFIG["crm"]+f"/crm/v4/objects/tickets/{ticket_id}/associations/default/contacts/{contact_id}",{},hubspot_headers())
+
+def associate_interaction(ticket_id,contact_id,retries):
+ status,headers,_,used=request_with_retry("PUT","","",{},operation=lambda:hubspot_interaction_associate(ticket_id,contact_id))
+ retries+=used
+ if 200<=status<300: return {"success":True,"retry_count":retries}
+ return failure("crm_interaction",status,retries,headers,code="ambiguous_interaction" if retryable(status) else None,ambiguous=retryable(status))
+
 def crm_lookup(email):
  if CONFIG["crm_provider"]=="mock": return call("POST",CONFIG["crm"]+"/crm/lookup",{"email":email})
  payload={"filterGroups":[{"filters":[{"propertyName":"email","operator":"EQ","value":email}]}],"properties":["email"],"limit":2}
@@ -254,6 +292,31 @@ def record_interaction(payload):
  contact_id=opaque_id(payload.get("contact_id")); operation_key=opaque_id(payload.get("operation_key")); interaction=valid_interaction(payload.get("interaction"))
  if not contact_id or not operation_key or interaction is None: return failure("crm_interaction",400,0,code="invalid_interaction")
  if not interaction_capable(CONFIG["capabilities"]): return failure("crm_interaction",403,0,code="interaction_capability_missing")
+ if CONFIG["crm_provider"]=="hubspot":
+  status,headers,found,retries=request_with_retry("POST","","",{},operation=lambda:hubspot_interaction_lookup(operation_key))
+  if status!=200: return failure("crm_interaction",status,retries,headers,code="invalid_response" if status==422 else None)
+  if found.get("found"):
+   associated=associate_interaction(found["interaction_id"],contact_id,retries)
+   if not associated["success"]: return associated
+   return {"success":True,"interaction_id":found["interaction_id"],"resolution":"reused","retry_count":associated["retry_count"]}
+  for attempt in range(1,CONFIG["attempts"]+1):
+   status,headers,created=hubspot_interaction_create(interaction,operation_key)
+   current_retries=retries+attempt-1
+   if 200<=status<300:
+    ticket_id=created["interaction_id"]
+    associated=associate_interaction(ticket_id,contact_id,current_retries)
+    if not associated["success"]: return associated
+    return {"success":True,"interaction_id":ticket_id,"resolution":"created","retry_count":associated["retry_count"]}
+   if status in (401,403) or (not retryable(status) and status!=409): return failure("crm_interaction",status,current_retries,headers,code="invalid_response" if status==422 else None)
+   lookup_status,lookup_headers,lookup=hubspot_interaction_lookup(operation_key)
+   if lookup_status==200 and lookup.get("found"):
+    ticket_id=lookup["interaction_id"]
+    associated=associate_interaction(ticket_id,contact_id,current_retries)
+    if not associated["success"]: return associated
+    return {"success":True,"interaction_id":ticket_id,"resolution":"reused","retry_count":associated["retry_count"]}
+   if lookup_status!=200: return failure("crm_interaction",lookup_status,current_retries,lookup_headers,code="ambiguous_interaction",ambiguous=True)
+   if status==409 or attempt==CONFIG["attempts"]: return failure("crm_interaction",status,current_retries,headers,code="ambiguous_interaction" if retryable(status) else None,ambiguous=retryable(status))
+   wait(headers,status,attempt)
  if CONFIG["crm_provider"]!="mock": return failure("crm_interaction",403,0,code="interaction_capability_missing")
  for attempt in range(1,CONFIG["attempts"]+1):
   status,headers,body=call("POST",CONFIG["crm"]+"/crm/interactions",{"contact_id":contact_id,"interaction":interaction,"operation_key":operation_key})
@@ -269,7 +332,13 @@ def record_interaction(payload):
 def reconcile_interaction(payload):
  operation_key=opaque_id(payload.get("operation_key"))
  if not operation_key: return failure("crm_interaction",400,0,code="invalid_operation_key")
- if not CONFIG["capabilities"].get("interaction_reconciliation") or CONFIG["crm_provider"]!="mock": return failure("crm_interaction",403,0,code="interaction_reconciliation_missing")
+ if not CONFIG["capabilities"].get("interaction_reconciliation"): return failure("crm_interaction",403,0,code="interaction_reconciliation_missing")
+ if CONFIG["crm_provider"]=="hubspot":
+  status,headers,body,retries=request_with_retry("POST","","",{},operation=lambda:hubspot_interaction_lookup(operation_key))
+  if status==200:
+   return {"success":True,"found":body["found"],"absence_conclusive":body["absence_conclusive"],"interaction_id":body.get("interaction_id"),"retry_count":retries}
+  return failure("crm_interaction",status,retries,headers,code="invalid_response" if status==422 else None)
+ if CONFIG["crm_provider"]!="mock": return failure("crm_interaction",403,0,code="interaction_reconciliation_missing")
  status,headers,body=call("POST",CONFIG["crm"]+"/crm/interactions/reconcile",{"operation_key":operation_key})
  if status==200 and isinstance(body,dict) and isinstance(body.get("found"),bool):
   interaction_id=opaque_id(body.get("interaction_id")) if body.get("found") else None
