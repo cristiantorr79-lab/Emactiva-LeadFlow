@@ -14,6 +14,10 @@ Antes de comprometer alcance, confirmar:
 - la fuente es integrable;
 - el sistema destino está identificado;
 - el email está disponible como identidad en V1;
+- se definió si interaction aplica y si un contacto puede realizar múltiples consultas;
+- `interest` y/o `message`, su finalidad y minimización están definidos cuando corresponda;
+- la representación de interaction en CRM está acordada;
+- las capabilities `interaction_write`, `interaction_idempotency` e `interaction_reconciliation` están demostradas o clasificadas;
 - CRM/API es compatible o queda sujeto a evaluación;
 - campos de entrada y destino están identificados y justificados;
 - restricciones técnicas, operacionales, de privacidad y jurisdicción conocidas están registradas;
@@ -21,6 +25,8 @@ Antes de comprometer alcance, confirmar:
 - la modalidad es Entrega técnica o Implementado por Emactiva.
 
 La validación técnica de Emactiva y la validación funcional del cliente son gates separados.
+
+Clasificar como `STANDARD / CORE` cuando las capabilities necesarias ya existen y están demostradas; como `CONFIGURATION / INTEGRATION` cuando basta configuración, mapping o un provider compatible; como `PRODUCT ADAPTATION` cuando el CRM/provider exige una capacidad o cambio de contrato nuevo; y como `CUSTOM / OTHER PRODUCT` cuando la necesidad excede razonablemente LeadFlow. HubSpot interaction mediante Ticket es una capability real demostrada si el entorno, configuración y scopes requeridos están satisfechos; otros CRM deben evaluarse por sus propias garantías.
 
 Si falta una respuesta dependiente del cliente o del entorno, se registra como pendiente o `NOT_VERIFIED`; no se convierte en promesa.
 
@@ -55,4 +61,4 @@ Un nuevo cliente no crea una copia divergente del core. La variación se resuelv
 
 En Entrega técnica, el handoff identifica artefactos, configuración requerida, dependencias, límites, QA disponible y verificaciones que quedan a cargo del cliente. En Implementado por Emactiva añade evidencia del deployment autorizado, resultados de QA, cleanup, riesgos residuales, criterios aceptados y responsabilidades operacionales posteriores.
 
-LeadFlow puede implementarse remotamente. Discovery operativo detallado, accesos reales, despliegue remoto, producción, rollback, soporte post-handoff, responsabilidades operacionales e infraestructura real se defieren a un LAB posterior; LAB-LF-005 no diseña ese procedimiento.
+LeadFlow puede implementarse remotamente. El discovery operativo detallado, accesos, deployment, preflight, rollback, cleanup, handoff y responsabilidades están definidos por LAB-LF-006 en `LEADFLOW_REMOTE_DEPLOYMENT_RUNBOOK.md`; los controles dependientes del cliente se verifican en su entorno concreto.

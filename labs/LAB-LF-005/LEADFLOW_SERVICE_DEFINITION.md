@@ -4,9 +4,23 @@
 
 LeadFlow es el primer producto/servicio técnicamente terminado de Emactiva que entra en preparación comercial. Emactiva es la empresa y marca madre; LeadFlow es una oferta dentro de ella y no define por sí sola toda la empresa.
 
-LeadFlow recibe y procesa inicialmente leads de forma confiable: valida y normaliza entradas, aplica idempotencia y deduplicación, coordina el CRM y el enrichment permitido, ejecuta retries controlados y mantiene trazabilidad y alertas sanitizadas. En V1 el email es la identidad de búsqueda. El producto no promete una interfaz productiva para usuarios finales.
+LeadFlow recibe y procesa leads de forma confiable: valida y normaliza entradas, aplica idempotencia y deduplicación, coordina el CRM y el enrichment permitido, ejecuta retries controlados y mantiene trazabilidad y alertas sanitizadas. En V1 el email normalizado es la identidad de búsqueda del contacto. El producto no promete una interfaz productiva para usuarios finales.
 
 Definición comercial aprobada: **LeadFlow ayuda a empresas a recibir y gestionar leads de forma más ordenada, evitando duplicados, reduciendo tareas manuales y manteniendo trazabilidad cuando algo falla.**
+
+## EVENT, LEAD e INTERACTION
+
+- **EVENT:** envío técnico identificado por `source + event_id`.
+- **LEAD:** contacto relativamente estable identificado para búsqueda por email normalizado.
+- **INTERACTION:** consulta opcional con `interest` y/o `message`.
+
+El mismo contacto puede realizar múltiples consultas: un nuevo `event_id` para el mismo email crea un EVENT nuevo, reutiliza el LEAD y puede registrar una nueva INTERACTION. Un duplicate exacto del mismo `source + event_id` no crea otra interaction ni repite efectos externos. V1 sin interaction continúa soportado.
+
+## CRM Adapters e interaction
+
+HubSpot es el primer CRM Adapter real validado. Dentro de ese Adapter, LEAD usa Contact e INTERACTION se representa como Ticket asociado al Contact; la propiedad única `leadflow_interaction_key` permite idempotencia y reconciliación concluyente, y el cleanup de la interaction sintética fue demostrado. Ticket no pertenece al Core: LeadFlow sigue siendo CRM-agnostic.
+
+Pipeline, stage, scopes y demás configuración concreta dependen del entorno y no se presumen universales. Otros CRM no heredan automáticamente compatibilidad. Cuando INTERACTION aplica, su Adapter debe ofrecer garantías apropiadas de escritura, idempotencia y reconciliación; si falta una capability crítica, falla cerrado.
 
 ## ICP operacional preliminar
 
@@ -56,3 +70,9 @@ La clasificación se confirma durante el diagnóstico; no se presume por el nomb
 - Pricing definitivo, suscripción, SLA y modalidad administrada se definirán en otra etapa.
 - La adaptación de identidad a teléfono o WhatsApp está diferida.
 - Privacidad, jurisdicción, rol de Emactiva, base aplicable, contratos y controles de infraestructura se confirman por cliente y deployment; no se infieren desde esta definición.
+
+## Privacidad y DSR
+
+Se mantienen minimización, secretos fuera de Git, ausencia de payload completo y exclusión de PII, `interest` y `message` de logs, Slack y respuestas públicas. Recovery usa contexto mínimo y cifrado; las operation keys no contienen PII y `lead_identifier` continúa siendo dato seudonimizado. Enrichment se limita a `industry`, `company_size` y `website` y no sobrescribe email, nombre, teléfono ni interaction.
+
+DSR HubSpot permanece `PARTIAL / NON-BLOCKING`; no se declara soporte externo completo. LOCATE, EXPORT, CORRECT/ANNOTATE, DELETE y RESTRICT requieren completar capacidades del provider y pueden constituir un alcance DSR específico, con autorización independiente para acciones destructivas.

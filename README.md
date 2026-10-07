@@ -4,15 +4,17 @@ Automatización modular de captación y gestión de leads para PYMES. LeadFlow V
 
 ## Alcance V1
 
-Webhook → validación y normalización → idempotencia en PostgreSQL → consulta y creación/actualización CRM → enriquecimiento → actualización CRM → logging persistente → respuesta. Los errores se clasifican, se reintentan solo cuando corresponde y generan alerta Slack al fallar definitivamente.
+Webhook → validación / normalización → EVENT / idempotencia → LEAD / CRM → checkpoint de contacto → INTERACTION opcional → enrichment → persistencia / respuesta. Los errores se clasifican, se reintentan solo cuando corresponde y generan alerta Slack al fallar definitivamente.
+
+EVENT identifica cada envío técnico mediante `source + event_id` y conserva una identidad SHA-256; un duplicado exacto no repite efectos externos. LEAD representa el contacto relativamente estable y usa el email normalizado como identidad principal de búsqueda. INTERACTION representa una consulta concreta con `interest` y/o `message`: es opcional, por lo que V1 sin interaction sigue soportado. El mismo email con un nuevo `event_id` reutiliza el contacto y puede registrar una nueva interaction.
 
 La solución usa n8n como orquestador y PostgreSQL como autoridad de persistencia e idempotencia. Existen CRM Adapter, Enrichment Adapter y Slack Adapter, configurables por entorno, además de controles de privacidad, retención, DSR y recuperación.
 
-El núcleo contiene reglas reutilizables; los adaptadores traducen contratos y errores de cada proveedor. Production se configura mediante variables de entorno y validación fail-closed, sin almacenar secretos en Git.
+El núcleo contiene reglas reutilizables; los adaptadores traducen contratos y errores de cada proveedor. Una interaction ambigua no se fuerza a fallo terminal: recovery conserva la ejecución original, reconcilia antes de repetir y no recrea contacto ni interaction a ciegas. HubSpot interaction real está validada mediante Tickets dentro del Adapter, con `leadflow_interaction_key` única para idempotencia y reconciliación; el Core sigue siendo CRM-agnostic. Production se configura mediante variables de entorno y validación fail-closed, sin almacenar secretos en Git.
 
 ## Estado actual
 
-LAB-LF-005 está cerrado y dejó disponible la preparación comercial y el playbook de implementación. LAB-LF-006 prepara la implementación remota en entornos autorizados de clientes. Los controles de infraestructura real —red, DNS, TLS, firewall, IAM, backup/restore, monitoreo y rotación— permanecen `NOT_VERIFIED` hasta obtener evidencia de un deployment real.
+LAB-LF-007 cerró con evidencia real en una VM piloto: separación de roles PostgreSQL, portabilidad Linux, runtime saludable, rotación de credencial y smoke funcional. Esa evidencia no promueve controles ajenos al alcance del piloto ni sustituye la validación del deployment específico de cada cliente. LAB-LF-008 cerró el modelo EVENT + LEAD + INTERACTION, compatibilidad V1, idempotencia, recovery, privacidad, retención y DSR. LAB-LF-009 actualizó y aprobó la demo comercial. LAB-LF-010 está alineando la documentación y consolidación operativa/comercial, sin reabrir esos cierres.
 
 - [Arquitectura](docs/architecture/ARCHITECTURE.md)
 - [Contratos](docs/architecture/CONTRACTS.md)
@@ -22,3 +24,6 @@ LAB-LF-005 está cerrado y dejó disponible la preparación comercial y el playb
 - [Runbook de deployment remoto — LAB-LF-006](labs/LAB-LF-006/LEADFLOW_REMOTE_DEPLOYMENT_RUNBOOK.md)
 - [Plantilla de implementación en cliente — LAB-LF-006](labs/LAB-LF-006/LEADFLOW_CLIENT_IMPLEMENTATION_TEMPLATE.md)
 - [Handoff — LAB-LF-006](labs/LAB-LF-006/HANDOFF_LAB-LF-006.md)
+- [Handoff — LAB-LF-007](labs/LAB-LF-007/HANDOFF_LAB-LF-007.md)
+- [Handoff — LAB-LF-008](labs/LAB-LF-008/HANDOFF_LAB-LF-008.md)
+- [Handoff — LAB-LF-009](labs/LAB-LF-009/HANDOFF_LAB-LF-009.md)

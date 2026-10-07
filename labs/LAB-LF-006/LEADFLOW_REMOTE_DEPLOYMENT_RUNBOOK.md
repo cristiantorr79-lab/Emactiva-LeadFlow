@@ -116,6 +116,11 @@ Antes de comprometer una implementación deben conocerse, cuando correspondan:
 - email disponible como identidad de búsqueda en LeadFlow V1;
 - necesidad justificada de nombre;
 - necesidad justificada de teléfono;
+- si interaction aplica y si cada envío representa una nueva consulta;
+- uso de `interest`, allowlist aplicable y obligatoriedad;
+- uso y finalidad justificada de `message`;
+- representación esperada de interaction en el CRM;
+- retención, cleanup y DSR de la interaction externa;
 - datos enviados a terceros;
 - finalidad del tratamiento;
 - requisitos de retención.
@@ -126,7 +131,12 @@ Antes de comprometer una implementación deben conocerse, cuando correspondan:
 - servicio de enrichment si aplica;
 - Slack o canal de alertas;
 - sistema origen;
+- capabilities CRM `interaction_write`, `interaction_idempotency` e `interaction_reconciliation` cuando interaction aplique;
+- mecanismo de idempotencia y reconciliación de interaction;
+- permisos/scopes requeridos para contacto e interaction;
 - APIs adicionales expresamente acordadas.
+
+No se presume que todos los CRM soporten interaction. HubSpot fue validado con Ticket dentro del Adapter, propiedad única `leadflow_interaction_key` y asociación Ticket → Contact; esa representación no se traslada al Core ni a otros providers.
 
 ### Infraestructura
 
@@ -284,11 +294,20 @@ Debe comprobar como mínimo:
 - rollback previsto;
 - datos sintéticos de prueba disponibles;
 - cleanup definido;
+- interaction requerida: Sí / No; si no aplica, `N/A` con justificación;
+- allowlist de `interest` definida cuando aplica;
+- texto libre `message` habilitado o deshabilitado y finalidad justificada;
+- representación CRM de interaction definida;
+- `interaction_write`, `interaction_idempotency` e `interaction_reconciliation` demostradas;
+- permisos/scopes de interaction disponibles;
+- cleanup de interaction definido;
 - ventana de implementación autorizada.
 
 Si existe un bloqueo crítico:
 
 **NO SE EJECUTA EL DEPLOYMENT.**
+
+Si falta una capability crítica de interaction, no se continúa con esa variante: se reclasifica el trabajo y el Adapter debe fallar cerrado. No se degrada silenciosamente idempotencia ni reconciliación.
 
 ## 12. Deployment
 
@@ -313,6 +332,9 @@ Puede incluir:
 - APP_ENV;
 - host público;
 - fuentes permitidas;
+- `LEADFLOW_ALLOWED_INTERESTS` cuando interaction aplique;
+- capabilities `CRM_CAP_INTERACTION_WRITE`, `CRM_CAP_INTERACTION_IDEMPOTENCY` y `CRM_CAP_INTERACTION_RECONCILIATION`;
+- operaciones `crm.record_interaction` y `crm.reconcile_interaction` en `ADAPTER_ALLOWED_OPERATIONS`;
 - proveedor CRM;
 - proveedor de enrichment;
 - endpoints;
@@ -321,6 +343,8 @@ Puede incluir:
 - timeouts;
 - retries;
 - parámetros operacionales.
+
+La configuración específica del provider permanece en su frontera. Para HubSpot se configuran externamente `HUBSPOT_TICKET_PIPELINE_ID` y `HUBSPOT_TICKET_STAGE_ID`; los valores `0` y `1` fueron validados en LF-011, pero no son universales y deben confirmarse por entorno. Los scopes requeridos son `crm.objects.contacts.read`, `crm.objects.contacts.write`, `crm.objects.tickets.read` y `crm.objects.tickets.write`.
 
 Los secretos no se incluyen en plantillas versionadas.
 
@@ -359,15 +383,17 @@ Si falla una condición crítica, se detienen las pruebas dependientes y se diag
 
 La primera ejecución debe realizarse con un lead sintético o expresamente controlado.
 
-Se valida:
+Se valida el recorrido vigente:
 
-**entrada → validación → idempotencia → CRM → enrichment → persistencia → trazabilidad → respuesta**
+**EVENT → LEAD → INTERACTION opcional → enrichment → persistencia → trazabilidad → respuesta**
 
-También debe repetirse el mismo evento para comprobar:
+Cuando interaction está habilitada, la aceptación mínima cubre:
 
-- detección de duplicado;
-- referencia a la ejecución original;
-- ausencia de efectos externos duplicados.
+- **Caso A — contacto nuevo + primera interaction:** EVENT nuevo, contacto creado, primera interaction creada, enrichment y `success`.
+- **Caso B — mismo email + nuevo `event_id`:** EVENT nuevo, contacto reutilizado, segunda interaction creada y ningún segundo contacto.
+- **Caso C — duplicate exacto:** mismo `source + event_id`, estado `duplicate`, sin contacto ni interaction nuevos y sin repetir efectos externos.
+
+Cuando interaction no aplica, se valida V1 sin interaction y se confirma que no se crea una ficticia.
 
 ## 17. Validación previa a producción
 
@@ -387,6 +413,8 @@ Pueden incluir:
 - IAM;
 - backups;
 - monitoreo.
+
+Cuando interaction aplique, validar además escritura real, idempotencia real, reconciliación por operation key, resultado ambiguo/recovery, scopes/permisos y retención/DSR del provider. Recovery trabaja sobre la ejecución original, reconcilia antes de repetir y no recrea contacto ni interaction a ciegas.
 
 No se repiten baterías históricas completas sin riesgo o cambio que lo justifique.
 
@@ -420,6 +448,7 @@ Después de las pruebas deben eliminarse o revocarse, según corresponda:
 
 - leads sintéticos;
 - contactos de prueba;
+- interactions sintéticas externas;
 - archivos temporales;
 - datos temporales;
 - accesos temporales;
@@ -429,6 +458,8 @@ Después de las pruebas deben eliminarse o revocarse, según corresponda:
 - artefactos auxiliares.
 
 Debe realizarse un post-check cuando sea técnicamente controlable.
+
+Cada interaction sintética debe quedar como `eliminada`, `conservada con justificación` o `no controlable por provider / pendiente externo`. No se afirma borrado automático universal. LF-011 demostró cleanup del Ticket sintético de HubSpot; su cobertura DSR completa permanece `PARTIAL / NON-BLOCKING`.
 
 ## 21. Handoff
 
@@ -499,6 +530,8 @@ Debe existir evidencia de:
 - smoke test satisfactorio;
 - primera ejecución controlada satisfactoria;
 - duplicado comprobado;
+- cuando interaction aplique: contacto nuevo con primera interaction, mismo contacto con nueva interaction y duplicate exacto sin una interaction adicional;
+- cleanup de interaction resuelto y límites del provider registrados;
 - persistencia comprobada;
 - cleanup resuelto;
 - rollback definido;

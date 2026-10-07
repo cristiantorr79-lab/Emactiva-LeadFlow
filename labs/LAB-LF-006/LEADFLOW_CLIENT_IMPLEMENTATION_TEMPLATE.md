@@ -47,6 +47,13 @@
 **last_name requerido:** Sí / No  
 **phone requerido:** Sí / No  
 
+**Interaction aplica:** Sí / No
+**interest requerido:** Sí / No
+**message requerido:** Sí / No
+**Finalidad de message:**
+**Representación en CRM:**
+**Provider / capability relevante:**
+
 **Justificación de teléfono si aplica:**
 
 **Otros campos necesarios:**
@@ -111,6 +118,7 @@ No incluir valores secretos.
 **APP_ENV:**  
 **PUBLIC_WEBHOOK_HOST:**  
 **LEADFLOW_ALLOWED_SOURCES:**  
+**LEADFLOW_ALLOWED_INTERESTS:**
 **CRM_PROVIDER:**  
 **ENRICHMENT_PROVIDER:**  
 **CRM_UPSTREAM_URL:**  
@@ -120,6 +128,12 @@ No incluir valores secretos.
 **Retención processing/recovery:**  
 **RETRY_MAX_ATTEMPTS:**  
 **Timeouts relevantes:**  
+**Capabilities interaction aplicables:**
+**ADAPTER_ALLOWED_OPERATIONS para interaction:**
+**HUBSPOT_TICKET_PIPELINE_ID, si HubSpot aplica:**
+**HUBSPOT_TICKET_STAGE_ID, si HubSpot aplica:**
+
+Los valores de pipeline/stage dependen del entorno; no registrar secretos ni asumir como universales los valores validados en otro portal.
 
 **Mappings del cliente:**
 
@@ -139,6 +153,12 @@ No incluir valores secretos.
 | Rol app disponible | | |
 | Conectividad disponible | | |
 | CRM preparado | | |
+| Interaction aplica | | |
+| Representación CRM de interaction definida | | |
+| `interaction_write` | | |
+| `interaction_idempotency` | | |
+| `interaction_reconciliation` | | |
+| Cleanup de interaction definido | | |
 | Enrichment preparado | | |
 | Alertas preparadas | | |
 | Migraciones identificadas | | |
@@ -205,28 +225,40 @@ Estados permitidos:
 
 Si Sí, justificar:
 
-### Flujo
+### Caso 1 — contacto nuevo
 
 | Etapa | Estado | Evidencia |
 |---|---|---|
-| Entrada | | |
-| Validación | | |
-| Idempotencia | | |
-| CRM | | |
+| EVENT nuevo | | |
+| LEAD creado | | |
+| INTERACTION creada, si aplica | | |
 | Enrichment | | |
 | Persistencia | | |
-| Trazabilidad | | |
 | Respuesta | | |
 
-### Duplicado
+### Caso 2 — mismo contacto + nueva consulta
 
-**Mismo evento reenviado:** Sí / No  
+| Evidencia | Estado | Nota |
+|---|---|---|
+| Nuevo `event_id` | | |
+| Mismo email normalizado | | |
+| Contacto reutilizado | | |
+| Nueva interaction | | |
+| No se creó segundo contacto | | |
+
+### Caso 3 — duplicate exacto
+
+**Mismo source:** Sí / No
+**Mismo event_id:** Sí / No
 **Detectado como duplicado:** Sí / No  
+**Creó nueva interaction:** Sí / No
 **Repitió efectos externos:** Sí / No  
 
 Resultado esperado:
 
 **No debe repetir efectos externos.**
+
+Si interaction no aplica, documentar la ejecución V1 sin interaction y confirmar que no se creó una interaction ficticia.
 
 ## 10. Validaciones del entorno
 
@@ -292,13 +324,16 @@ Si fue utilizado:
 |---|---|---|
 | Leads sintéticos | eliminar / conservar justificado | |
 | Contactos CRM de prueba | eliminar / conservar justificado | |
+| Interactions CRM sintéticas | eliminar / conservar justificado / no controlable por provider | |
 | Archivos temporales | eliminar | |
 | Datos temporales | eliminar | |
 | Accesos temporales | revocar | |
 | Tokens temporales | revocar | |
 | Configuración temporal | eliminar | |
 
-**Post-check cleanup:**
+**Post-check contactos, cuando sea controlable:**
+
+**Post-check interactions, cuando sea controlable:**
 
 ## 14. Handoff
 
@@ -334,6 +369,15 @@ Si fue utilizado:
 
 ## 15. Aceptación funcional
 
+Cuando interaction aplique, confirmar:
+
+- [ ] Contacto nuevo y primera interaction correctos
+- [ ] Segunda consulta reutiliza el contacto y crea una nueva interaction
+- [ ] Duplicate exacto no crea una tercera interaction
+- [ ] Datos visibles únicamente donde corresponde
+- [ ] `message` e `interest` ausentes de logs, Slack y respuestas públicas
+- [ ] Retención, cleanup y límite DSR del provider registrados
+
 **Responsable del cliente:**  
 **Fecha:**  
 
@@ -357,12 +401,3 @@ Si fue utilizado:
 
 **Handoff completado:** Sí / No  
 **Implementación cerrada:** Sí / No
-## Preflight LF-008 — interactions
-
-- Allowlist exacta de `interest`:
-- ¿Se habilita `message` libre?:
-- Representación de la interacción en el CRM:
-- Idempotencia efectiva por operation key:
-- Reconciliación concluyente y semántica de ausencia:
-- Retención y proceso DSR del CRM:
-- Capabilities verificadas: `interaction_write`, `interaction_idempotency`, `interaction_reconciliation`.

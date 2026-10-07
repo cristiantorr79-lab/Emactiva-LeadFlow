@@ -5,20 +5,36 @@
 JSON objeto, Content-Type application/json:
 
 ```json
-{"event_id":"evt_123456","source":"website","lead":{"first_name":"Cristian","last_name":"Torres","email":"cristian@example.com","phone":"+56912345678","company":"Empresa Demo"}}
+{
+  "event_id": "evt_demo_123",
+  "source": "website",
+  "lead": {
+    "first_name": "Nombre Demo",
+    "last_name": "Apellido Demo",
+    "email": "lead.demo@example.test",
+    "phone": "+15550100000",
+    "company": "Empresa Sintetica"
+  },
+  "interaction": {
+    "interest": "producto_a",
+    "message": "Consulta sintetica de demostracion."
+  }
+}
 ```
 
 Obligatorios: `event_id` técnico de 1–128 caracteres, patrón `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`, con al menos un dígito o separador técnico y sin forma de teléfono numérico; `source` de 1–64 caracteres, patrón `[A-Za-z][A-Za-z0-9_-]{0,63}`, que se normaliza a minúsculas y debe pertenecer a `LEADFLOW_ALLOWED_SOURCES`; `lead` objeto y `lead.email` string. Email, URL, teléfono, nombre o texto libre no son identificadores de evento válidos. Opcionales: first_name, last_name, phone y company (strings de hasta 200 caracteres). No se convierten números ni null a strings. Campos desconocidos se ignoran y no se propagan. Campos omitidos no borran valores del CRM; cadenas opcionales vacías se omiten.
 
 Email: trim → lowercase → formato; máximo 254 caracteres, una sola @, partes no vacías, sin espacios, dominio con etiquetas no vacías separadas por punto. La validación inicial es pragmática, no comprueba entrega ni DNS; formato inválido se rechaza. El email normalizado es la identidad de búsqueda; no se intenta normalizar teléfonos en este LAB.
 
+`interaction` es opcional y admite exclusivamente `interest` y `message`. `interest` es string de hasta 100 caracteres y debe pertenecer, tras trim, a `LEADFLOW_ALLOWED_INTERESTS`. `message` es string de hasta 2000 caracteres; recibe solo trim exterior y conserva contenido interno, saltos y Unicode. Strings vacíos tras trim se omiten, tipos incorrectos no se coercionan, campos desconocidos no se propagan y una interaction vacía equivale a omitida. Su contenido no forma parte de la identidad EVENT ni se incorpora al LEAD.
+
 ## Estados y etapas
 
 Estados: `received`, `processing`, `duplicate`, `retrying`, `success`, `failed`.
 
-Transiciones: received → processing / duplicate / failed; processing → retrying / success / failed; retrying → processing / failed. success, duplicate y failed son terminales para la entrega automática. Una recuperación administrativa futura requiere diseño explícito.
+Transiciones: received → processing / duplicate / failed; processing → retrying / success / failed; retrying → processing / failed. success, duplicate y failed son terminales para la entrega automática. Una interaction ambigua conserva la ejecución en `processing` para recovery y no se trata automáticamente como fallo terminal.
 
-Recovery opera siempre sobre la ejecución original y conserva `idempotency_key`. Antes de continuar comprueba el máximo `RECOVERY_MAX_PROCESSING_AGE_SECONDS`, cuyo default y límite superior son 604800 segundos. Si la ejecución arrendada excede ese tiempo sin progreso, termina en `failed` con `error_type=timeout` y `error_code=recovery_expired`; no existe purga global en este paso. Un resultado CRM ambiguo continúa usando reconciliación/lookup antes de cualquier decisión y nunca habilita un CREATE ciego.
+Recovery opera siempre sobre la ejecución original, conserva `idempotency_key` y reutiliza el checkpoint CRM. Reconcilia antes de repetir, no reejecuta ciegamente todo el flujo y no repite CREATE de contacto ni interaction a ciegas. Una interaction ambigua se reconcilia por `<idempotency_key>:crm_interaction`. Antes de continuar comprueba `RECOVERY_MAX_PROCESSING_AGE_SECONDS`, cuyo default y límite superior son 604800 segundos; una ejecución arrendada que excede ese máximo sin progreso termina en `failed` con `error_type=timeout` y `error_code=recovery_expired`.
 
 ## Retención y purga
 
@@ -38,9 +54,9 @@ La frontera de proceso recovery envía password y SQL por stdin a `psql`. Un fal
 
 El reclamo persistente recibe `execution_id`, `source` canónico, `event_id` transitorio, `idempotency_key` y `lead_identifier`. Devuelve `claimed`, la misma `execution_id` y `original_execution_id` (NULL si obtuvo propiedad). Valida que la clave corresponda exactamente a SHA-256 UTF-8 de `source:event_id`, pero no persiste el `event_id` crudo. Los duplicados conservan clave NULL y apuntan al propietario; la escritura directa de tablas no forma parte del contrato de aplicación. Los rechazos solo conservan códigos canónicos y nunca el identificador rechazado.
 
-Stages: `validation`, `idempotency`, `crm_lookup`, `crm_create`, `crm_update`, `enrichment`, `crm_enrichment_update`, `alert`. Normalización pertenece a validation. Logging y respuesta son responsabilidades transversales, no stages adicionales. El resumen conserva la etapa principal al fallar; un evento independiente registra alert.
+Stages: `validation`, `idempotency`, `crm_lookup`, `crm_create`, `crm_update`, `crm_interaction`, `enrichment`, `crm_enrichment_update`, `alert`. Normalización pertenece a validation. Logging y respuesta son responsabilidades transversales, no stages adicionales. El resumen conserva la etapa principal al fallar; un evento independiente registra alert.
 
-crm_action: null, `created` o `updated`; crm_contact_id es string opaco. enrichment_status: `not_started`, `processing`, `success`, `failed`. retry_count inicia en cero y cuenta reintentos acumulados. Cada evento de auditoría tiene attempt_number local (primer intento = 1).
+crm_action: null, `created` o `updated`; crm_contact_id es string opaco. `interaction_status`: `not_required`, `pending`, `ambiguous` o `confirmed`; `ambiguous` es recuperable y no terminal. enrichment_status: `not_started`, `processing`, `success`, `failed`. retry_count inicia en cero y cuenta reintentos acumulados. Cada evento de auditoría tiene attempt_number local (primer intento = 1).
 
 ## Respuestas
 
@@ -59,6 +75,13 @@ Validación, HTTP 400:
 {"ok":false,"execution_id":"lf_exec_xxx","status":"failed","error":{"type":"validation_error"}}
 ```
 
+Interaction ambigua recuperable, HTTP 202:
+```json
+{"ok":false,"execution_id":"lf_exec_xxx","status":"processing","recoverable":true,"error":{"type":"ambiguous_interaction"}}
+```
+
+Esta respuesta pública no incluye `message`, `interest`, email, payload, contexto de recovery, secretos, headers, tokens ni stack traces.
+
 Otros fallos conservan la forma de error: HTTP 502 para dependencia definitiva y HTTP 503 para infraestructura local indisponible. No se copia ciegamente el HTTP del proveedor al cliente. Errores conceptuales: validation_error, authentication_error, authorization_error, technical_not_found, conflict_error, rate_limit, timeout, network_error, upstream_error, ambiguous_create, persistence_error e internal_error. Código y mensaje públicos, si se añaden, deben ser genéricos y sanitizados; sin stack traces ni secretos. El webhook síncrono futuro deberá dimensionar su timeout al presupuesto real de operaciones; no se presupone que 20 segundos cubran todo el flujo.
 
 Respuesta diagnóstica LF-001.C para un evento nuevo, HTTP 200:
@@ -74,7 +97,7 @@ En production, `LEADFLOW_WEBHOOK_KEY` es obligatorio y no puede ser débil. El C
 
 Toda operación funcional del Adapter exige el header `X-LeadFlow-Adapter-Key`. Core y recovery obtienen su valor de `ADAPTER_SERVICE_KEY`; el Adapter compara la identidad en tiempo constante y autoriza la operación contra `ADAPTER_ALLOWED_OPERATIONS`. Ambos parámetros son obligatorios, externos al código y no deben registrarse. Una identidad ausente o inválida devuelve `401`; una identidad válida sin permiso devuelve `403`; las respuestas son canónicas y no incluyen la credencial. `/healthz` queda fuera de este contrato para permitir el healthcheck local.
 
-Las operaciones configurables son `crm.process`, `crm.update_enrichment`, `enrichment.enrich`, `alert.send` y `crm.capabilities`. Esta identidad de aplicación es portable y no depende de IP, dominio o proveedor. La red, TLS interno, IAM y rotación efectiva del secreto se verifican en el entorno desplegado.
+Las operaciones configurables son `crm.process`, `crm.update_enrichment`, `crm.record_interaction`, `crm.reconcile_interaction`, `enrichment.enrich`, `alert.send` y `crm.capabilities`. Esta identidad de aplicación es portable y no depende de IP, dominio o proveedor. La red, TLS interno, IAM y rotación efectiva del secreto se verifican en el entorno desplegado.
 
 ## CRM Adapter
 
@@ -82,16 +105,17 @@ Las operaciones configurables son `crm.process`, `crm.update_enrichment`, `enric
 - `createContact(lead, operation_key)` → `{contact_id, created:true}`. operation_key se deriva establemente de idempotency_key y la operación. Repetirla devuelve el mismo contacto. Email tiene unicidad atómica y lectura posterior consistente en el mock.
 - `updateContact(contact_id, present_fields)` → `{contact_id}`. PATCH lógico: no borrar omitidos; email identifica el contacto y no se modifica en esta V1. Repetir los mismos campos no agrega efectos.
 - `updateEnrichment(contact_id, enrichment_fields)` → `{contact_id}`; misma garantía de repetición segura.
+- `recordInteraction(contact_id, interaction, operation_key)` registra la consulta solo después de confirmar el contacto CRM. La clave estable es `<idempotency_key>:crm_interaction`, no contiene PII y se usa también para reconciliación.
 
-Cada operación recibe URL upstream, API key y timeout desde entorno. La API key no se transmite hasta definir el esquema de autenticación del proveedor. Los errores se traducen al contrato sanitizado; un 404 de ruta o contacto de update es técnico, mientras lookup sin coincidencia devuelve `found:false`. Un conflicto de creación requiere lookup, no retry ciego.
+Cada operación recibe URL upstream, credencial y timeout desde entorno. HubSpot usa Bearer y Hunter `X-API-KEY`, construidos dentro del Adapter. Los errores se traducen al contrato sanitizado; un 404 de ruta o contacto de update es técnico, mientras lookup sin coincidencia devuelve `found:false`. Un conflicto de creación requiere lookup, no retry ciego. Las capabilities de interaction —write, idempotency y reconciliation— son independientes; si falta alguna requerida, el Adapter falla cerrado antes del efecto.
 
-Los mocks locales simulan disponibilidad, latencia, códigos HTTP, unicidad, creación completada con respuesta perdida y contadores de llamadas/contactos. Siguen siendo los únicos destinos externos actuales.
+Los mocks locales simulan disponibilidad, latencia, códigos HTTP, unicidad, resultados ambiguos y contadores de llamadas/contactos/interactions. Son destinos de development; HubSpot y Hunter ya están seleccionados y configurados como providers reales detrás del Adapter.
 
 ## Enrichment Adapter
 
 `enrich({email,company?})` → `{enrichment_status:"success",data:{industry?,company_size?,website?}}`. Los campos son strings, company_size es categoría textual, website es URL pública; todos son opcionales. Solo esta lista se propaga a CRM y un resultado vacío válido es success. No sobreescribir nombres/email ni registrar la respuesta completa.
 
-Error usa el mismo contrato sanitizado que CRM. El mock local permite resultados configurables de timeout, 429, 400, 401, 403, 5xx y éxito, además de latencia y Retry-After; no se invoca API real. Configuración mediante `ENRICHMENT_UPSTREAM_URL` y `ENRICHMENT_API_KEY`. La URL de alerta permanece dentro de su adaptador y nunca aparece en logs.
+Error usa el mismo contrato sanitizado que CRM. El mock local permite resultados configurables de timeout, 429, 400, 401, 403, 5xx y éxito, además de latencia y Retry-After. En development se usa el mock; `ENRICHMENT_PROVIDER=hunter` selecciona el provider real. Configuración mediante `ENRICHMENT_UPSTREAM_URL` y `ENRICHMENT_API_KEY`. La URL de alerta permanece dentro de su adaptador y nunca aparece en logs.
 
 ## Conformidad de adaptadores LF-002.2
 
@@ -106,7 +130,10 @@ Cada CRM Adapter declara este capability profile booleano:
   "consistent_lookup_after_create": true,
   "unique_email": true,
   "idempotent_create_operation_key": true,
-  "conflict_reconciliation": true
+  "conflict_reconciliation": true,
+  "interaction_write": true,
+  "interaction_idempotency": true,
+  "interaction_reconciliation": true
 }
 ```
 
@@ -142,10 +169,13 @@ Solo se envían email y los campos LeadFlow presentes. Enrichment se traduce a p
 `ENRICHMENT_PROVIDER=hunter` usa Combined Enrichment con el email y autentica mediante `X-API-KEY`. HTTP 404 se traduce a success sin datos; 401 y 451 son permanentes; 403 representa rate limit documentado; 429 conserva `Retry-After`, y cuando identifica cuota/uso agotado termina sin retry como `quota_exhausted`. Timeout y 5xx mantienen la política temporal vigente. Solo `industry`, `company_size` y `website` pueden salir del Adapter.
 
 HubSpot y Hunter son terceros/destinos externos del flujo de datos. Las pruebas reales deberán usar datos sintéticos o controlados. La revisión formal de base jurídica, transferencias, retención, derechos y gestión de terceros queda para LAB-LF-003; este contrato no declara cumplimiento legal.
+
+LF-011 validó INTERACTION real en HubSpot mediante Tickets, exclusivamente dentro del Adapter. La propiedad única `leadflow_interaction_key` representa la operation key de LeadFlow, permite idempotencia y reconciliación concluyente por key, y el Ticket se asocia al Contact confirmado. El Core conserva el contrato neutral y no incorpora semántica de HubSpot. DSR HubSpot permanece `PARTIAL / NON-BLOCKING`: no se declara soporte DSR externo completo.
+
 # Interaction (LF-008)
 
 `interaction` es opcional y admite sólo `interest` (máximo 100, allowlist `LEADFLOW_ALLOWED_INTERESTS`) y `message` (máximo 2000). Ambos deben ser strings; vacío tras trim equivale a omitido. `message` sólo recibe trim exterior y conserva contenido interno, saltos de línea y Unicode. Campos desconocidos no se propagan.
 
-El adapter neutral ofrece `recordInteraction(contact_id, interaction, operation_key)` y reconciliación por la misma clave. La respuesta contiene únicamente éxito, identificador opaco, resolución `created`/`reused`, reintentos y error sanitizado. Un lookup negativo sólo habilita repetición cuando declara ausencia concluyente.
+El adapter neutral ofrece `recordInteraction(contact_id, interaction, operation_key)` y reconciliación por la misma clave. El contacto CRM debe estar confirmado previamente. La respuesta contiene únicamente éxito, identificador opaco, resolución `created`/`reused`, reintentos y error sanitizado. Un lookup negativo sólo habilita repetición cuando declara ausencia concluyente.
 
 LeadFlow no registra ni devuelve el mensaje. El contexto local cifrado existe únicamente durante processing/recovery. La interacción ya confirmada vive en el CRM externo: retención, exportación, corrección y eliminación en ese sistema dependen del provider adapter y de la configuración contractual del cliente; borrar el contexto local no borra el objeto externo.

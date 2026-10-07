@@ -1,6 +1,6 @@
 # LeadFlow — Guía de demo comercial
 
-Demo comercial final aprobada: `Emactiva_LeadFlow_Demo_v1.3_spot_clean.mp4`. No usar versiones posteriores como referencia final. Estado visual y recorrido comercial: **PASS**. WARN menor aceptado: ruido/respiración puntual alrededor de `00:29–00:31`; no reprocesar audio nuevamente.
+Demo audiovisual oficial aprobada: `labs/LAB-LF-009/material_comercial/Emactiva_LeadFlow_Demo_LF009_FINAL_v2_audio_uniforme.mp4`. Estado visual, audio y recorrido comercial: **PASS**.
 
 Duración objetivo: 4–6 minutos. Usar exclusivamente datos sintéticos y un entorno development/demo con mocks. No mostrar `.env`, claves, tokens, headers, URLs sensibles, datos personales reales ni respuestas internas completas.
 
@@ -20,7 +20,7 @@ Duración objetivo: 4–6 minutos. Usar exclusivamente datos sintéticos y un en
 
 **Demo comercial:** problema, resultado, ausencia de duplicación, trazabilidad, adaptabilidad y modalidades. Exposición técnica mínima.
 
-**Profundización técnica:** solo cuando corresponda, explicar n8n, contratos, adapters, PostgreSQL, idempotencia, retries y separación de environment. No convertir la demo inicial en una auditoría técnica.
+**Profundización técnica:** solo cuando corresponda, explicar n8n, contratos, adapters, PostgreSQL, idempotencia, retries y separación de environment. HubSpot es el primer CRM Adapter real validado; INTERACTION se representa como Ticket únicamente dentro de ese Adapter y LeadFlow sigue siendo CRM-agnostic. No convertir la demo inicial en una auditoría técnica ni en una prueba HubSpot real.
 
 ## Pantallas auxiliares
 
@@ -31,7 +31,7 @@ Las cuatro pantallas estáticas de `demo-assets/` apoyan el relato comercial y n
 3. **Fallos y recuperación:** acompaña la explicación de fallo transitorio, retry controlado y fallo definitivo sin mostrar códigos, logs ni detalles sensibles.
 4. **Cierre:** resume adaptabilidad, modalidades aprobadas y la pregunta de diagnóstico al prospecto.
 
-El Demo Sender realiza el envío sintético y muestra success/duplicate; el CRM mock permite evidenciar el efecto controlado en el entorno de demo; n8n se muestra brevemente solo durante la profundización técnica y sin exponer secretos o datos internos innecesarios. Las pantallas auxiliares contextualizan esas vistas, pero no las sustituyen ni añaden capacidades al producto.
+El Demo Sender realiza el envío sintético y muestra success/duplicate; el CRM mock permite evidenciar deliberadamente el efecto controlado en el entorno de demo y no implica dependencia funcional del mock. n8n se muestra brevemente solo durante la profundización técnica y sin exponer secretos o datos internos innecesarios. Las pantallas auxiliares contextualizan esas vistas, pero no las sustituyen ni añaden capacidades al producto.
 
 ### CRM Demo View
 
@@ -68,6 +68,6 @@ El paquete inicial incluye el video demo final, un diagrama simple de arquitectu
 - Tener preparada la evidencia sanitizada de fallo/retry.
 - Al terminar, cerrar el Sender. El Sender no guarda historial ni tiene base propia. Si se generaron datos temporales en el runtime, aplicar el procedimiento autorizado del entorno; no borrar datos indiscriminadamente durante la reunión.
 
-El comando `cleanup` valida el namespace reservado, pero actualmente falla cerrado sin ejecutar SQL: LeadFlow no persiste `event_id`, por lo que la base no puede demostrar la relación entre sesión y `execution_id`. Hasta aprobar una trazabilidad local específica de demo, el cleanup PostgreSQL requiere selección manual por la lista explícita de `execution_id`; nunca usar email, fecha, últimas filas ni DELETE amplio. Los mocks sí se limpian mediante `prepare`.
+El comando `cleanup` valida el namespace reservado, pero actualmente falla cerrado sin ejecutar SQL: LeadFlow no persiste `event_id`, por lo que la base no puede demostrar la relación entre sesión y `execution_id`. Hasta aprobar una trazabilidad local específica de demo, el cleanup PostgreSQL requiere selección manual por la lista explícita de `execution_id`; nunca usar email, fecha, últimas filas ni DELETE amplio. Los mocks sí se limpian mediante `prepare`. Este procedimiento corresponde solo al entorno demo; el cleanup de proveedores reales se ejecuta mediante su procedimiento autorizado y no se presume a partir de la limpieza de mocks.
 
 La demo final se producirá por clips de pantalla y voz en off grabada por separado. Esto permite capturar cada lámina, Demo Sender, CRM Demo View y vista breve de n8n sin exponer comandos, secretos o esperas operacionales.

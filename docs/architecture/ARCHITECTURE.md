@@ -2,9 +2,9 @@
 
 ## Componentes y límites
 
-n8n orquestará el webhook y el núcleo reutilizable: validar, normalizar, reclamar evento, gestionar estados, clasificar errores, aplicar retries, registrar y responder. PostgreSQL será autoridad para idempotencia y trazabilidad. Los adaptadores CRM, enriquecimiento y alerta Slack traducirán los contratos externos sin introducir reglas del proveedor en el núcleo. Configuración exclusivamente por entorno, según `.env.example`.
+n8n orquesta el webhook y el Core reutilizable: validación, normalización, reclamación EVENT, gestión de estados, procesamiento LEAD, procesamiento INTERACTION, enrichment, retries, recovery, logging y respuesta. PostgreSQL es la autoridad para idempotencia, trazabilidad, recovery, retención y soporte DSR donde corresponde. Los adaptadores traducen los contratos de CRM, interaction, enrichment y Slack sin introducir reglas del proveedor en el Core. La configuración se externaliza por entorno según `.env.example`: cambia el entorno, no el sistema.
 
-LF-002.1 materializa esa frontera mediante el servicio interno `adapters`: el Core consume contratos estables `/crm/process`, `/enrichment/enrich`, actualización de enrichment y `/alert`; solo el adaptador conoce los endpoints y formatos HTTP de los mocks. Retries, delays y timeout del proveedor se configuran por entorno y se validan al iniciar. Las API keys se reciben en la frontera pero no se envían hasta definir el esquema de autenticación del proveedor real.
+LF-002.1 introdujo esa frontera mediante el servicio interno `adapters`: el Core pasó a consumir contratos estables y el Adapter a traducir endpoints y formatos de proveedor. Retries, delays y timeout se configuran por entorno y se validan al iniciar.
 
 LF-002.2 convierte esta frontera en un contrato ejecutable. Cada CRM Adapter declara capacidades de unicidad, lookup posterior a CREATE, idempotencia por operation key y reconciliación de conflictos. El Core no conoce formatos de proveedor. Un CREATE ambiguo solo se repite cuando el perfil demuestra una garantía segura; en otro caso termina como `ambiguous_create`. La suite de conformidad valida también updates parciales, whitelist de enrichment, clasificación de errores, Retry-After y sanitización antes de admitir un adaptador futuro.
 
@@ -12,18 +12,22 @@ LF-002.4 separa development y production mediante `APP_ENV` y un override Compos
 
 LF-002.5 selecciona HubSpot como CRM y Hunter Combined Enrichment como proveedor real, siempre detrás del servicio Adapter. `CRM_PROVIDER` y `ENRICHMENT_PROVIDER` eligen mock o real; el Core y recovery conservan únicamente contratos canónicos. HubSpot usa Service Key como Bearer y un perfil deliberadamente conservador: no se presume unicidad, consistencia posterior a CREATE ni idempotencia por operation key. Hunter usa `X-API-KEY`; su respuesta se reduce a industry, company_size y website antes de salir del Adapter. Las respuestas crudas y credenciales no se registran ni persisten.
 
-LF-001.C ejecuta n8n 2.28.6 en Docker, persistente y publicado solo en loopback. El workflow `leadflow_core_initial.json` autentica `X-LeadFlow-Key`, valida sin propagar PII, calcula hashes y usa exclusivamente `claim_event` y `record_validation_failure` con el rol de aplicación. Un nuevo evento queda honestamente en processing; aún no hay success comercial.
+LF-001.C introdujo n8n persistente, autenticación `X-LeadFlow-Key`, validación sin propagación de PII y el reclamo inicial del evento. En esa etapa un evento nuevo quedaba en `processing`; etapas posteriores incorporaron el flujo comercial completo, recovery e interaction.
 
-LF-001 ya incorpora `workflows/` y `scripts/test/` con contenido ejecutable. `mocks/`, `database/seeds/` y `docs/handoff/` siguen diferidos hasta que tengan contenido real; el handoff canónico permanece en `labs/`.
+LF-001 incorporó `workflows/` y `scripts/test/` con contenido ejecutable. Los handoffs históricos canónicos permanecen en `labs/`.
 
 ## Flujo normal
 
-1. Asignar `execution_id` único y registrar recepción con mínimos metadatos.
-2. Validar entrada y normalizar email (trim, lowercase y formato). Rechazar antes de cualquier llamada externa si es inválida.
-3. Validar `source` contra `LEADFLOW_ALLOWED_SOURCES`, normalizarlo a minúsculas, validar `event_id` como token técnico y calcular SHA-256 UTF-8 de `source + ":" + event_id`; reclamar el evento atómicamente sin persistir el `event_id` crudo.
-4. Pasar a processing; consultar CRM por email normalizado. Crear si no existe o actualizar los campos presentes si existe.
-5. Enriquecer mediante el adaptador; actualizar únicamente los campos de enriquecimiento permitidos en CRM.
-6. Persistir success y finished_at antes de responder. Si el enriquecimiento falla definitivamente, el resultado global es failed aunque el contacto ya exista; no se intenta revertirlo.
+1. Generar un `execution_id` único y registrar la recepción con metadatos mínimos.
+2. Validar la entrada y normalizar el email; rechazar datos inválidos antes de llamadas externas.
+3. Validar `source` y `event_id`, calcular SHA-256 UTF-8 de `source + ":" + event_id` y reclamar el EVENT atómicamente sin persistir el `event_id` crudo.
+4. Consultar el LEAD por email normalizado; crear el contacto o actualizar únicamente los campos presentes.
+5. Persistir el checkpoint seguro del contacto CRM confirmado.
+6. Si existe INTERACTION, registrarla con la operation key estable `<idempotency_key>:crm_interaction` y persistir el resultado. Un resultado ambiguo conserva estado recuperable y devuelve HTTP 202.
+7. Si interaction está omitida o vacía tras normalización, continuar sin crear una interaction ficticia.
+8. Ejecutar enrichment después de interaction.
+9. Actualizar únicamente `industry`, `company_size` y `website`; nunca sobrescribir email, nombre, teléfono ni interaction.
+10. Persistir `success` y `finished_at` antes de responder. Un fallo definitivo se registra de forma sanitizada y no revierte efectos externos ya confirmados.
 
 ## Idempotencia y concurrencia
 
@@ -37,11 +41,11 @@ La operación oficial `leadflow.claim_event` inserta el registro received con cl
 
 El rol de aplicación no tiene escritura directa en estas tablas: ejecuta funciones transaccionales concedidas expresamente. Así, la operación oficial garantiza que `duplicate_of` apunta a una fila con la clave reclamada. La FK garantiza existencia y las pruebas negativas/concurrentes verifican la regla que no puede expresarse limpiamente mediante un CHECK entre filas.
 
-Un duplicado nunca modifica el estado del propietario ni dispara efectos externos. Su respuesta identifica su propia recepción y la ejecución original. Una entrega repetida de un evento failed tampoco lo reejecuta: la recuperación futura será una operación explícita sobre la ejecución original, no un bypass de UNIQUE. La misma clave con contenido distinto sigue siendo duplicada; el emisor debe asignar un nuevo event_id a cada cambio.
+Un duplicado nunca modifica el estado del propietario ni dispara efectos externos. Su respuesta identifica su propia recepción y la ejecución original. Una entrega repetida de un evento failed tampoco lo reejecuta: recovery opera explícitamente sobre la ejecución original, sin bypass de UNIQUE. La misma clave con contenido distinto sigue siendo duplicada; el emisor debe asignar un nuevo `event_id` a cada cambio. El mismo email con un `event_id` nuevo puede reutilizar el LEAD y registrar una nueva INTERACTION.
 
 `source` es un slug canónico en minúsculas tomado de una allowlist de entorno y no contiene `:`. `event_id` puede contener `:` dentro de su formato técnico, se usa transitoriamente y mantiene sensibilidad a mayúsculas. No se recortan ni corrigen silenciosamente valores inválidos.
 
-Si un proceso muere en processing, la fila permanece reclamada. LAB-LF-001 deberá definir recuperación controlada de ejecuciones interrumpidas y reconciliar CRM antes de reanudarlas. No expirar ni borrar automáticamente claves para reejecutar. Un fallo de PostgreSQL bloquea efectos externos y devuelve error de infraestructura; si no puede escribirse el log, no se afirma que quedó persistido.
+Si un proceso queda interrumpido en `processing`, la fila permanece reclamada. Recovery opera sobre esa ejecución original, conserva `idempotency_key`, usa el checkpoint del contacto y reconcilia interaction por su operation key antes de repetir. No recrea contacto ni interaction a ciegas; una interaction ambigua permanece no terminal. La falta de progreso está acotada por `RECOVERY_MAX_PROCESSING_AGE_SECONDS`. Un fallo de PostgreSQL bloquea efectos externos y devuelve error de infraestructura; si no puede escribirse el log, no se afirma que quedó persistido.
 
 ## CREATE con resultado ambiguo
 
@@ -82,7 +86,10 @@ LeadFlow emite eventos operacionales JSON con nivel y salida configurables. La a
 
 El core consume adaptadores por endpoints configurados, los secretos permanecen fuera de Git y producción usa un override sin puertos locales publicados. Los volúmenes persistentes son `leadflow_postgres_data` y `leadflow_n8n_data`; el contrato de backup está en `config/backup-policy.json` y exige reaplicar el estado DSR tras restore. Cambiar de entorno se resuelve mediante variables y overrides, sin modificar el core.
 
-Permanecen **HYBRID/ENVIRONMENT** y no verificados hasta un despliegue real: red, DNS, dominio, TLS, firewall, IAM, almacenamiento y volúmenes efectivos, cifrado de host/storage, backup/restore ejecutados, monitoreo y separación dev/test/prod desplegada.
+LF-007 obtuvo evidencia real en una VM piloto para separación de roles y ownership PostgreSQL, ruta Linux, runtime saludable, rotación de una credencial, autenticación TCP y smoke funcional post-remediación. Esa evidencia se conserva como PASS dentro del alcance del piloto.
+
+Permanecen `NOT_VERIFIED` únicamente los controles **HYBRID/ENVIRONMENT** que dependan del futuro deployment específico del cliente y no hayan sido cubiertos por aquella evidencia: por ejemplo su red, DNS/dominio, frontera TLS, firewall/IAM, almacenamiento y cifrado efectivos, backup/restore, monitoreo y separación de entornos desplegada. No se extrapola el sizing ni la configuración de la VM piloto.
+
 # LF-008: Event, Lead e Interaction
 
 LeadFlow mantiene tres identidades separadas. `event_id` + `source` identifica el envío técnico y conserva la clave histórica `SHA-256(source + ":" + event_id)`; el email normalizado identifica el contacto; `interaction` contiene únicamente el contexto opcional del contacto actual. El contacto CRM se confirma localmente antes de escribir la interacción y esta usa `<idempotency_key>:crm_interaction`, sin PII.
