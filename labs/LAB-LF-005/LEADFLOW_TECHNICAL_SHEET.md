@@ -42,7 +42,7 @@ Se minimizan logs y persistencia; no se guardan payloads completos, email en cla
 
 Retención inicial configurable: success 90 días, duplicate 90 días, failed 180 días y processing/recovery sin progreso máximo 7 días. Holds y operaciones DSR aplican según contratos vigentes.
 
-DSR HubSpot permanece `PARTIAL / NON-BLOCKING`: LOCATE, EXPORT, CORRECT/ANNOTATE, DELETE y RESTRICT están `PARTIAL`. No se declara soporte DSR externo completo.
+DSR HubSpot según LAB-LF-012: LOCATE, EXPORT, CORRECT y DELETE validados dentro del alcance controlable. DELETE exige aprobación independiente y mantiene WARN por archivado de Tickets sin prueba de eliminación física permanente. RESTRICT permanece NOT_VERIFIED / capability_not_available. No se declara cobertura DSR universal.
 
 ## Entornos
 
@@ -52,7 +52,7 @@ DSR HubSpot permanece `PARTIAL / NON-BLOCKING`: LOCATE, EXPORT, CORRECT/ANNOTATE
 
 ## Evidencia existente
 
-LF-008 demostró EVENT + LEAD + INTERACTION, compatibilidad V1, idempotencia, recovery, privacidad, retención y DSR local. LF-009 aprobó Demo Sender, CRM Demo View y la demo audiovisual vigente. LF-011 validó interaction real HubSpot mediante Ticket, asociación, idempotencia, reconciliación y cleanup, con DSR externo parcial.
+LF-008 demostró EVENT + LEAD + INTERACTION, compatibilidad V1, idempotencia, recovery, privacidad, retención y DSR local. LF-009 aprobó Demo Sender, CRM Demo View y la demo audiovisual vigente. LF-011 validó interaction real HubSpot mediante Ticket, asociación, idempotencia, reconciliación y cleanup. LF-012 validó las operaciones DSR HubSpot controlables y documentó WARN para archivado de Tickets y NOT_VERIFIED para RESTRICT.
 
 ## Demo, modalidades y límites
 
