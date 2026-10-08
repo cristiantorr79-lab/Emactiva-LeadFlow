@@ -81,4 +81,10 @@ Mantener #11 y #2 abiertos. El siguiente paso exacto es obtener autorización pa
 
 ## Cierre Git posterior
 
-**PENDIENTE DE EVIDENCIA REAL.** No se ejecutaron commit ni push. Completar esta sección solo después de autorización explícita, con hash de commit, rama, resultado de push y estado Git limpio realmente observados.
+- Commit inicial: `5f25fd4`.
+- Mensaje: `docs(lab-lf-013): integrar packaging comercial y handoff`.
+- Push a `origin/main`: PASS.
+- `HEAD` y `origin/main`: sincronizados en `5f25fd48051d8319b24af8e4350dd58ee0288889`.
+- `git status --short`: sin salida; árbol limpio después del push inicial.
+- Commit documental de cierre: PENDIENTE.
+- Verificación final de sincronización: PENDIENTE.
