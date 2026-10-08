@@ -14,10 +14,11 @@ except ModuleNotFoundError:
 ALLOWED_ENRICHMENT={"industry","company_size","website"}
 TEMPORARY_STATUSES={408,429,500,502,503,504}
 HUBSPOT_CAPABILITIES={"consistent_lookup_after_create":False,"unique_email":False,"idempotent_create_operation_key":False,"conflict_reconciliation":True,"interaction_write":True,"interaction_idempotency":True,"interaction_reconciliation":True}
-ADAPTER_OPERATIONS={"crm.process","crm.update_enrichment","crm.record_interaction","crm.reconcile_interaction","enrichment.enrich","alert.send","crm.capabilities"}
+ADAPTER_OPERATIONS={"crm.process","crm.update_enrichment","crm.record_interaction","crm.reconcile_interaction","crm.dsr_locate","crm.dsr_export","crm.dsr_correct","crm.dsr_delete","enrichment.enrich","alert.send","crm.capabilities"}
 TECHNICAL_CODE=re.compile(r"^[a-z][a-z0-9_-]{0,99}$")
 OPAQUE_ID=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 TEXT_LIMITS={"industry":200,"company_size":100}
+DSR_CONTACT_FIELDS={"first_name":"firstname","last_name":"lastname","phone":"phone","company":"company"}
 LOGGER=StructuredLogger("adapter")
 
 def load_config(env=os.environ):
@@ -56,9 +57,12 @@ def load_config(env=os.environ):
  }
  service_key=str(env.get("ADAPTER_SERVICE_KEY", ""))
  if len(service_key)<32 or any(char in service_key for char in "\r\n\0"): raise ValueError("missing or invalid ADAPTER_SERVICE_KEY")
+ destructive_service_key=str(env.get("DSR_ADAPTER_SERVICE_KEY", ""))
+ if destructive_service_key and (len(destructive_service_key)<32 or any(char in destructive_service_key for char in "\r\n\0")): raise ValueError("invalid DSR_ADAPTER_SERVICE_KEY")
+ if destructive_service_key and hmac.compare_digest(destructive_service_key,service_key): raise ValueError("adapter identities must be distinct")
  allowed_operations={item.strip() for item in str(env.get("ADAPTER_ALLOWED_OPERATIONS", "")).split(",") if item.strip()}
  if not allowed_operations or not allowed_operations<=ADAPTER_OPERATIONS: raise ValueError("missing or invalid ADAPTER_ALLOWED_OPERATIONS")
- config.update(service_key=service_key,allowed_operations=allowed_operations)
+ config.update(service_key=service_key,destructive_service_key=destructive_service_key,allowed_operations=allowed_operations)
  defaults={"crm":"http://crm-mock:8080","enrichment":"http://enrichment-mock:8080","alert":"http://slack-mock:8080/webhook"}
  config.update(crm=env.get("CRM_UPSTREAM_URL",defaults["crm"] if app_env=="development" and crm_provider=="mock" else ""),enrichment=env.get("ENRICHMENT_UPSTREAM_URL",defaults["enrichment"] if app_env=="development" and enrichment_provider=="mock" else ""),alert=env.get("ALERT_UPSTREAM_URL",defaults["alert"] if app_env=="development" else ""),crm_api_key=env.get("CRM_API_KEY",""),enrichment_api_key=env.get("ENRICHMENT_API_KEY",""))
  config["hubspot_enrichment_properties"]={"industry":env.get("HUBSPOT_PROPERTY_INDUSTRY","industry"),"company_size":env.get("HUBSPOT_PROPERTY_COMPANY_SIZE","leadflow_company_size"),"website":env.get("HUBSPOT_PROPERTY_WEBSITE","website")}
@@ -207,7 +211,7 @@ def associate_interaction(ticket_id,contact_id,retries):
  status,headers,_,used=request_with_retry("PUT","","",{},operation=lambda:hubspot_interaction_associate(ticket_id,contact_id))
  retries+=used
  if 200<=status<300: return {"success":True,"retry_count":retries}
- return failure("crm_interaction",status,retries,headers,code="ambiguous_interaction" if retryable(status) else None,ambiguous=retryable(status))
+ return failure("crm_interaction",status,retries,headers,code="ambiguous_interaction" if retryable(status) else None,ambiguous=retryable(status),diagnostic_phase="interaction_association")
 
 def crm_lookup(email):
  if CONFIG["crm_provider"]=="mock": return call("POST",CONFIG["crm"]+"/crm/lookup",{"email":email})
@@ -219,6 +223,118 @@ def crm_lookup(email):
  if not results: return 200,headers,{"found":False}
  contact=results[0]; contact_id=opaque_id(contact.get("id")) if isinstance(contact,dict) else None
  return (200,headers,{"found":True,"contact":{"id":contact_id,"email":((contact.get("properties") or {}).get("email"))}}) if isinstance(contact_id,str) else (422,headers,{})
+
+def valid_dsr_request(payload,correct=False):
+ if not isinstance(payload,dict) or set(payload)-({"request_id","verified_email","corrections"} if correct else {"request_id","verified_email"}): return None
+ request_id=opaque_id(payload.get("request_id")); email=payload.get("verified_email")
+ if not request_id or not isinstance(email,str): return None
+ email=email.strip().lower()
+ if not email or len(email)>320 or email.count("@")!=1 or any(ord(char)<33 or ord(char)>126 for char in email): return None
+ if not correct: return request_id,email,None
+ corrections=payload.get("corrections")
+ if not isinstance(corrections,dict) or not corrections or set(corrections)-set(DSR_CONTACT_FIELDS): return None
+ clean={}
+ for key,value in corrections.items():
+  if not isinstance(value,str) or len(value.strip())>200 or any(ord(char)<32 for char in value): return None
+  clean[key]=value.strip()
+ return request_id,email,clean
+
+def hubspot_dsr_contact(email,export=False):
+ properties=["email",*DSR_CONTACT_FIELDS.values(),*CONFIG["hubspot_enrichment_properties"].values()] if export else ["email"]
+ payload={"filterGroups":[{"filters":[{"propertyName":"email","operator":"EQ","value":email}]}],"properties":properties,"limit":2}
+ status,headers,body=call("POST",CONFIG["crm"]+"/crm/v3/objects/contacts/search",payload,hubspot_headers())
+ if status!=200: return status,headers,{}
+ results=body.get("results") if isinstance(body,dict) else None
+ if not isinstance(results,list) or len(results)>1: return 422,headers,{}
+ if not results: return 200,headers,{"found":False}
+ contact=results[0] if isinstance(results[0],dict) else {}; contact_id=opaque_id(contact.get("id"))
+ return (200,headers,{"found":True,"contact_id":contact_id,"properties":contact.get("properties") or {}}) if contact_id else (422,headers,{})
+
+def hubspot_dsr_tickets(contact_id,export=False):
+ status,headers,body=call("GET",CONFIG["crm"]+f"/crm/v4/objects/contacts/{contact_id}/associations/tickets?limit=100",None,hubspot_headers())
+ if status!=200: return status,headers,{}
+ results=body.get("results") if isinstance(body,dict) else None
+ if not isinstance(results,list) or (body.get("paging") if isinstance(body,dict) else None): return 422,headers,{}
+ ids=[opaque_id(str(item.get("toObjectId"))) for item in results if isinstance(item,dict) and item.get("toObjectId") is not None]
+ if any(item is None for item in ids): return 422,headers,{}
+ if not ids: return 200,headers,{"interactions":[]}
+ mapping=CONFIG["hubspot_interaction_properties"]; props=[mapping["key"]]
+ if export: props.extend([mapping["interest"],mapping["message"]])
+ status,headers,body=call("POST",CONFIG["crm"]+"/crm/v3/objects/tickets/batch/read",{"properties":props,"inputs":[{"id":item} for item in ids]},hubspot_headers())
+ rows=body.get("results") if isinstance(body,dict) else None
+ if status!=200 or not isinstance(rows,list): return (status if status!=200 else 422),headers,{}
+ row_ids=[opaque_id(str(row.get("id"))) for row in rows if isinstance(row,dict) and row.get("id") is not None]
+ if len(row_ids)!=len(ids) or set(row_ids)!=set(ids): return 422,headers,{}
+ interactions=[]
+ for row in rows:
+  properties=row.get("properties") if isinstance(row,dict) else None
+  if not isinstance(properties,dict) or not properties.get(mapping["key"]): continue
+  item={"reference":opaque_id(row.get("id"))}
+  if not item["reference"]: return 422,headers,{}
+  if export:
+   if properties.get(mapping["interest"]) is not None: item["interest"]=properties[mapping["interest"]]
+   if properties.get(mapping["message"]) is not None: item["message"]=properties[mapping["message"]]
+  interactions.append(item)
+ return 200,headers,{"interactions":interactions}
+
+def dsr_locate(payload,export=False):
+ valid=valid_dsr_request(payload)
+ if not valid or CONFIG["crm_provider"]!="hubspot": return failure("dsr",400 if not valid else 403,0,code="dsr_request_invalid" if not valid else "dsr_capability_missing")
+ request_id,email,_=valid; status,headers,contact=hubspot_dsr_contact(email,export)
+ if status!=200: return failure("dsr",status,0,headers,code="subject_ambiguous" if status==422 else None)
+ if not contact.get("found"): return {"success":True,"request_id":request_id,"found":False,"contact_count":0,"interaction_count":0,"technical_reference":request_id+":hubspot"}
+ status,headers,tickets=hubspot_dsr_tickets(contact["contact_id"],export)
+ if status!=200: return failure("dsr",status,0,headers,code="invalid_response" if status==422 else None)
+ result={"success":True,"request_id":request_id,"found":True,"contact_count":1,"interaction_count":len(tickets["interactions"]),"technical_reference":request_id+":hubspot"}
+ if export:
+  properties=contact["properties"]; reverse={value:key for key,value in {**DSR_CONTACT_FIELDS,**CONFIG["hubspot_enrichment_properties"]}.items()}
+  result["export"]={"contact":{("email" if key=="email" else reverse[key]):value for key,value in properties.items() if value is not None and (key=="email" or key in reverse)},"interactions":tickets["interactions"]}
+ return result
+
+def dsr_correct(payload):
+ valid=valid_dsr_request(payload,True)
+ if not valid or CONFIG["crm_provider"]!="hubspot": return failure("dsr",400 if not valid else 403,0,code="dsr_request_invalid" if not valid else "dsr_capability_missing")
+ request_id,email,corrections=valid; status,headers,contact=hubspot_dsr_contact(email)
+ if status!=200: return failure("dsr",status,0,headers,code="subject_ambiguous" if status==422 else None)
+ if not contact.get("found"): return {"success":True,"request_id":request_id,"found":False,"corrected_count":0,"technical_reference":request_id+":hubspot"}
+ expected={DSR_CONTACT_FIELDS[key]:value for key,value in corrections.items()}
+ write_status,write_headers,_=call("PATCH",CONFIG["crm"]+f"/crm/v3/objects/contacts/{contact['contact_id']}",{"properties":expected},hubspot_headers())
+ read_status,read_headers,read_body=call("GET",CONFIG["crm"]+f"/crm/v3/objects/contacts/{contact['contact_id']}?properties="+",".join(expected),None,hubspot_headers())
+ actual=read_body.get("properties") if isinstance(read_body,dict) else None
+ reconciled=read_status==200 and isinstance(actual,dict) and all(actual.get(key)==value for key,value in expected.items())
+ if not reconciled:
+  if not 200<=write_status<300: return failure("dsr",write_status,0,write_headers,code="ambiguous_correction" if retryable(write_status) else None,ambiguous=retryable(write_status))
+  return failure("dsr",read_status if read_status!=200 else 422,0,read_headers,code="correction_not_reconciled",ambiguous=True)
+ return {"success":True,"request_id":request_id,"found":True,"corrected_count":len(expected),"reconciled":True,"technical_reference":request_id+":hubspot"}
+
+def hubspot_object_absent(object_type,object_id):
+ status,headers,_=call("GET",CONFIG["crm"]+f"/crm/v3/objects/{object_type}/{object_id}",None,hubspot_headers())
+ if status==404: return True,status,headers
+ if status==200: return False,status,headers
+ return None,status,headers
+
+def dsr_delete(payload):
+ valid=valid_dsr_request(payload)
+ if not valid or CONFIG["crm_provider"]!="hubspot": return failure("dsr_delete",400 if not valid else 403,0,code="dsr_request_invalid" if not valid else "dsr_capability_missing")
+ request_id,email,_=valid; status,headers,contact=hubspot_dsr_contact(email)
+ if status!=200: return failure("dsr_delete",status,0,headers,code="subject_ambiguous" if status==422 else None)
+ if not contact.get("found"):
+  return {"success":True,"request_id":request_id,"found":False,"resolution":"already_absent","interaction_count":0,"technical_reference":request_id+":hubspot"}
+ status,headers,tickets=hubspot_dsr_tickets(contact["contact_id"])
+ if status!=200: return failure("dsr_delete",status,0,headers,code="ticket_inventory_incomplete" if status==422 else None)
+ targets=[item["reference"] for item in tickets["interactions"]]
+ for ticket_id in targets:
+  write_status,write_headers,_=call("DELETE",CONFIG["crm"]+f"/crm/v3/objects/tickets/{ticket_id}",None,hubspot_headers())
+  absent,read_status,read_headers=hubspot_object_absent("tickets",ticket_id)
+  if absent is not True:
+   effective=read_status if read_status not in (200,404) else write_status
+   return failure("dsr_delete",effective,0,read_headers or write_headers,code="ticket_deletion_ambiguous",ambiguous=True)
+ write_status,write_headers,_=call("POST",CONFIG["crm"]+"/crm/v3/objects/contact/gdpr-delete",{"objectId":contact["contact_id"]},hubspot_headers())
+ read_status,read_headers,reconciled=hubspot_dsr_contact(email)
+ if read_status==200 and not reconciled.get("found"):
+  return {"success":True,"request_id":request_id,"found":True,"resolution":"deleted","interaction_count":len(targets),"tickets_resolution":"archived","reconciled":True,"technical_reference":request_id+":hubspot"}
+ effective=read_status if read_status!=200 else write_status
+ return failure("dsr_delete",effective,0,read_headers or write_headers,code="contact_deletion_ambiguous",ambiguous=True)
 
 def crm_create(lead,operation_key):
  if CONFIG["crm_provider"]=="mock":
@@ -294,7 +410,7 @@ def record_interaction(payload):
  if not interaction_capable(CONFIG["capabilities"]): return failure("crm_interaction",403,0,code="interaction_capability_missing")
  if CONFIG["crm_provider"]=="hubspot":
   status,headers,found,retries=request_with_retry("POST","","",{},operation=lambda:hubspot_interaction_lookup(operation_key))
-  if status!=200: return failure("crm_interaction",status,retries,headers,code="invalid_response" if status==422 else None)
+  if status!=200: return failure("crm_interaction",status,retries,headers,code="invalid_response" if status==422 else None,diagnostic_phase="interaction_invalid_response" if status==422 else "interaction_lookup")
   if found.get("found"):
    associated=associate_interaction(found["interaction_id"],contact_id,retries)
    if not associated["success"]: return associated
@@ -307,15 +423,15 @@ def record_interaction(payload):
     associated=associate_interaction(ticket_id,contact_id,current_retries)
     if not associated["success"]: return associated
     return {"success":True,"interaction_id":ticket_id,"resolution":"created","retry_count":associated["retry_count"]}
-   if status in (401,403) or (not retryable(status) and status!=409): return failure("crm_interaction",status,current_retries,headers,code="invalid_response" if status==422 else None)
+   if status in (401,403) or (not retryable(status) and status!=409): return failure("crm_interaction",status,current_retries,headers,code="invalid_response" if status==422 else None,diagnostic_phase="interaction_invalid_response" if status==422 else "interaction_create")
    lookup_status,lookup_headers,lookup=hubspot_interaction_lookup(operation_key)
    if lookup_status==200 and lookup.get("found"):
     ticket_id=lookup["interaction_id"]
     associated=associate_interaction(ticket_id,contact_id,current_retries)
     if not associated["success"]: return associated
     return {"success":True,"interaction_id":ticket_id,"resolution":"reused","retry_count":associated["retry_count"]}
-   if lookup_status!=200: return failure("crm_interaction",lookup_status,current_retries,lookup_headers,code="ambiguous_interaction",ambiguous=True)
-   if status==409 or attempt==CONFIG["attempts"]: return failure("crm_interaction",status,current_retries,headers,code="ambiguous_interaction" if retryable(status) else None,ambiguous=retryable(status))
+   if lookup_status!=200: return failure("crm_interaction",lookup_status,current_retries,lookup_headers,code="ambiguous_interaction",ambiguous=True,diagnostic_phase="interaction_lookup")
+   if status==409 or attempt==CONFIG["attempts"]: return failure("crm_interaction",status,current_retries,headers,code="ambiguous_interaction" if retryable(status) else None,ambiguous=retryable(status),diagnostic_phase="interaction_create")
    wait(headers,status,attempt)
  if CONFIG["crm_provider"]!="mock": return failure("crm_interaction",403,0,code="interaction_capability_missing")
  for attempt in range(1,CONFIG["attempts"]+1):
@@ -376,6 +492,12 @@ class Handler(BaseHTTPRequestHandler):
   if operation not in CONFIG["allowed_operations"]:
    self.respond(403,{"error":{"type":"authorization_error","code":"adapter_operation_forbidden","message":"adapter request rejected"}}); return False
   return True
+ def authorize_destructive(self):
+  provided=self.headers.get("X-LeadFlow-DSR-Adapter-Key","")
+  configured=CONFIG.get("destructive_service_key","")
+  if len(configured)<32 or not provided or not hmac.compare_digest(provided,configured):
+   self.respond(401,{"error":{"type":"authentication_error","code":"destructive_adapter_identity_invalid","message":"adapter request rejected"}}); return False
+  return True
  def do_GET(self):
   if self.path=="/healthz": self.respond(200,{"ok":True})
   elif self.path=="/crm/capabilities":
@@ -383,7 +505,8 @@ class Handler(BaseHTTPRequestHandler):
    profile=dict(CONFIG["capabilities"]); profile["safe_ambiguous_create_retry"]=safe_ambiguous_create_retry(profile); self.respond(200,profile)
   else: self.respond(404,{"error":canonical_error(404)})
  def do_POST(self):
-  operations={"/crm/process":"crm.process","/crm/record-interaction":"crm.record_interaction","/crm/reconcile-interaction":"crm.reconcile_interaction","/enrichment/enrich":"enrichment.enrich","/alert":"alert.send"}
+  if self.path=="/crm/dsr-delete" and not self.authorize_destructive(): return
+  operations={"/crm/process":"crm.process","/crm/record-interaction":"crm.record_interaction","/crm/reconcile-interaction":"crm.reconcile_interaction","/crm/dsr-locate":"crm.dsr_locate","/crm/dsr-export":"crm.dsr_export","/crm/dsr-correct":"crm.dsr_correct","/enrichment/enrich":"enrichment.enrich","/alert":"alert.send"}
   operation=operations.get(self.path)
   if operation is not None and not self.authorize(operation): return
   payload=self.payload()
@@ -391,6 +514,10 @@ class Handler(BaseHTTPRequestHandler):
   if self.path=="/crm/process": result=crm_process(payload)
   elif self.path=="/crm/record-interaction": result=record_interaction(payload)
   elif self.path=="/crm/reconcile-interaction": result=reconcile_interaction(payload)
+  elif self.path=="/crm/dsr-locate": result=dsr_locate(payload)
+  elif self.path=="/crm/dsr-export": result=dsr_locate(payload,True)
+  elif self.path=="/crm/dsr-correct": result=dsr_correct(payload)
+  elif self.path=="/crm/dsr-delete": result=dsr_delete(payload)
   elif self.path=="/enrichment/enrich": result=enrich(payload)
   elif self.path=="/alert":
    allowed={"execution_id","stage","error_code"}

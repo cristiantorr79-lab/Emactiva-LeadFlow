@@ -24,7 +24,7 @@ production={
  'POSTGRES_MIGRATOR_PASSWORD':'m'*32,'POSTGRES_APP_USER':'leadflow_app',
  'POSTGRES_APP_PASSWORD':'p'*32,'LEADFLOW_WEBHOOK_KEY':'w'*32,'N8N_ENCRYPTION_KEY':'n'*32,
  'RECOVERY_CONTEXT_KEY':'r'*32,'RECOVERY_ADAPTER_URL':'http://adapters:8080',
- 'ADAPTER_SERVICE_KEY':'a'*32,'ADAPTER_ALLOWED_OPERATIONS':'crm.process,crm.update_enrichment,enrichment.enrich,alert.send,crm.capabilities','DSR_SUBJECT_KEY':'d'*32,
+ 'ADAPTER_SERVICE_KEY':'a'*32,'DSR_ADAPTER_SERVICE_KEY':'z'*32,'ADAPTER_ALLOWED_OPERATIONS':'crm.process,crm.update_enrichment,enrichment.enrich,alert.send,crm.capabilities','DSR_SUBJECT_KEY':'d'*32,
  'CRM_UPSTREAM_URL':'https://crm.example.invalid','ENRICHMENT_UPSTREAM_URL':'https://enrichment.example.invalid',
  'SLACK_WEBHOOK_URL':'https://hooks.example.invalid/leadflow','PUBLIC_WEBHOOK_HOST':'leadflow.example.invalid',
  'CRM_PROVIDER':'hubspot','ENRICHMENT_PROVIDER':'hunter','CRM_API_KEY':'synthetic-crm','ENRICHMENT_API_KEY':'synthetic-enrichment',
