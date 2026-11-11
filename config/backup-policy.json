@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "frequency_hours": 24,
   "retention_days": 30,
   "rpo_hours": 24,
@@ -7,10 +7,31 @@
   "encryption_required": true,
   "custody": "environment_defined",
   "restore_requires_dsr_replay": true,
+  "format": {
+    "postgresql": "pg_dump_custom",
+    "n8n": "paused_volume_snapshot",
+    "encryption": "AES-256-GCM",
+    "key_source": "external_secret_file"
+  },
+  "storage": {
+    "provider": "gcs",
+    "bucket_source": "environment",
+    "credentials": "vm_service_account_temporary",
+    "overwrite": false,
+    "lifecycle_owner": "bucket_policy"
+  },
+  "identity_separation_required": true,
+  "independent_dsr_evidence_required": true,
+  "dsr_evidence_encryption": "AES-256-GCM",
+  "dsr_evidence_publication": "immutable_content_addressed",
+  "dsr_evidence_authority_manifest_required": true,
+  "soft_delete_additional_days": 7,
   "environment_controls": {
     "backup_execution": "NOT_VERIFIED",
     "restore_test": "NOT_VERIFIED",
     "storage_encryption": "NOT_VERIFIED",
-    "storage_access": "NOT_VERIFIED"
+    "storage_access": "NOT_VERIFIED",
+    "dsr_evidence_publication": "NOT_VERIFIED",
+    "dsr_evidence_confirmation": "NOT_VERIFIED"
   }
 }

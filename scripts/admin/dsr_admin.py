@@ -31,6 +31,25 @@ def database(statement):
 
 parts=database(sql).split("|")
 response={"request_id":parts[0],"status":parts[1],"local_status":parts[2],"result_code":parts[3],"matched_count":int(parts[4]),"deleted_count":int(parts[5])}
+if action in {"delete","restrict"} and response["local_status"] in {"completed","not_found"}:
+ evidence_id=None
+ try:
+  evidence=database(f"SELECT * FROM leadflow.prepare_dsr_restore_evidence({q(request['request_id'])});").split("|")
+  if len(evidence)!=3: raise ValueError("invalid evidence")
+  spool=os.environ.get("DSR_EVIDENCE_SPOOL_DIR",""); evidence_key=os.environ.get("DSR_EVIDENCE_KEY_FILE","")
+  staged=subprocess.run([sys.executable,str(ROOT/"scripts"/"backup"/"dsr_restore_evidence.py"),"stage","--key-file",evidence_key,"--spool-dir",spool],cwd=ROOT,input=json.dumps({"subject_token":evidence[0],"disposition":evidence[1],"effective_at_utc":evidence[2]},separators=(",",":")),text=True,capture_output=True)
+  if staged.returncode: raise RuntimeError("stage failed")
+  staged_result=json.loads(staged.stdout); evidence_id=staged_result["evidence_id"]
+  database(f"SELECT leadflow.record_dsr_restore_evidence({q(request['request_id'])},'staged',{q(evidence_id)},'evidence_staged');")
+  response.update(restore_protection_status="staged",restore_evidence_id=evidence_id)
+  if os.environ.get("DSR_EVIDENCE_AUTO_PUBLISH","").lower()=="true":
+   published=subprocess.run([sys.executable,str(ROOT/"scripts"/"backup"/"dsr_restore_evidence.py"),"publish","--artifact",staged_result["artifact"],"--gcs-prefix",os.environ.get("DSR_EVIDENCE_GCS_PREFIX",""),"--writer-identity",os.environ.get("DSR_EVIDENCE_WRITER_IDENTITY","")],cwd=ROOT,text=True,capture_output=True)
+   if published.returncode: raise RuntimeError("publish failed")
+   database(f"SELECT leadflow.record_dsr_restore_evidence({q(request['request_id'])},'pending_confirmation',{q(evidence_id)},'publication_unconfirmed');")
+   response["restore_protection_status"]="pending_confirmation"
+ except Exception:
+  database(f"SELECT leadflow.record_dsr_restore_evidence({q(request['request_id'])},'failed',{q(evidence_id)},'evidence_not_preserved');")
+  response.update(restore_protection_status="failed",restore_protection_result_code="evidence_not_preserved")
 if response["local_status"]=="completed" and action=="annotate":
  recorded=database(f"SELECT * FROM leadflow.record_dsr_provider_result({q(request['request_id'])},'hubspot','annotate','not_applicable',{q(request['request_id']+':hubspot')},'administrative_local_only');").split("|")
  response.update(status=recorded[1],provider_status="not_applicable",provider_result_code=recorded[2])

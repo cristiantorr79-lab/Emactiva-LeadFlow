@@ -36,6 +36,71 @@ def missing_config_fails_closed() -> bool:
         result = subprocess.run([BASH, str(sync)], text=True, capture_output=True, check=False, env=environment)
         return result.returncode != 0 and "Required PostgreSQL container variable is missing" in result.stderr
 
+
+def migration_fixture(directory: str) -> tuple[Path, Path]:
+    fixture = Path(directory) / "repo"
+    database = fixture / "database/migrations"
+    scripts = fixture / "scripts/database"
+    binary = fixture / "bin"
+    database.mkdir(parents=True)
+    scripts.mkdir(parents=True)
+    binary.mkdir()
+    shutil.copy2(apply, scripts / "apply_migrations.sh")
+    (scripts / "sync_database_roles.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    (scripts / "sync_database_roles.sh").chmod(0o755)
+    (scripts / "transfer_leadflow_ownership.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    (fixture / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    for version in ("001_initial", "002_second", "003_third", "004_fourth"):
+        (database / f"{version}.sql").write_text("SELECT 1;\n", encoding="utf-8")
+    fake_docker = binary / "docker"
+    fake_docker.write_text(
+        "#!/usr/bin/env bash\n"
+        "args=\"$*\"\n"
+        "if [[ \"$args\" == *'for name in POSTGRES_DB'* ]]; then printf 'testdb\\nbootstrap\\nmigrator\\n'; exit 0; fi\n"
+        "if [[ \"$args\" == *\"to_regclass('leadflow.schema_migrations')\"* ]]; then IFS= read -r _ || true; echo t; exit 0; fi\n"
+        "if [[ \"$args\" == *\"version='001_initial'\"* ]]; then IFS= read -r _ || true; echo t; exit 0; fi\n"
+        "if [[ \"$args\" == *'SELECT EXISTS'* ]]; then IFS= read -r _ || true; echo t; exit 0; fi\n"
+        "if [[ \"$args\" == *'SELECT version FROM'* ]]; then exit 0; fi\n"
+        "cat >/dev/null\n",
+        encoding="utf-8",
+    )
+    fake_docker.chmod(0o755)
+    return fixture, binary
+
+
+def run_fixture(scripts: Path, binary: Path, extra_environment=None):
+    environment = {**os.environ, "PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
+    environment.update(extra_environment or {})
+    return subprocess.run(
+        [BASH, str(scripts / "apply_migrations.sh")], text=True, capture_output=True,
+        check=False, env=environment, stdin=subprocess.DEVNULL,
+    )
+
+
+def stdin_consumption_does_not_truncate_migrations() -> bool:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture, binary = migration_fixture(directory)
+        result = run_fixture(fixture / "scripts/database", binary)
+        expected = [f"Already applied: {version}" for version in ("002_second", "003_third", "004_fourth")]
+        return result.returncode == 0 and all(line in result.stdout.splitlines() for line in expected)
+
+
+def incomplete_walk_fails_closed() -> bool:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture, binary = migration_fixture(directory)
+        fixture_apply = fixture / "scripts/database/apply_migrations.sh"
+        fixture_text = fixture_apply.read_text(encoding="utf-8")
+        fixture_apply.write_text(
+            fixture_text.replace(
+                "  processed=$((processed+1))",
+                "  [ \"$version\" = 002_second ] || processed=$((processed+1))",
+                1,
+            ),
+            encoding="utf-8",
+        )
+        result = run_fixture(fixture / "scripts/database", binary)
+        return result.returncode != 0 and "Migration traversal incomplete: processed=2 expected=3" in result.stderr
+
 checks = {
     "bash_syntax_sync": bool(BASH) and subprocess.run([BASH, "-n", str(sync)], check=False).returncode == 0,
     "bash_syntax_apply": bool(BASH) and subprocess.run([BASH, "-n", str(apply)], check=False).returncode == 0,
@@ -54,6 +119,8 @@ checks = {
     )),
     "historical_001_bootstrap_only": "001_initial.sql" in apply_text and "transfer_leadflow_ownership.sql" in apply_text,
     "remaining_migrations_use_migrator": "psql_file \"$migrator_user\" \"$migration\"" in apply_text,
+    "stdin_cannot_truncate_migration_walk": bool(BASH) and stdin_consumption_does_not_truncate_migrations(),
+    "migration_walk_count_fails_closed": bool(BASH) and incomplete_walk_fails_closed(),
 }
 for name, passed in checks.items():
     print(f"{'PASS' if passed else 'FAIL'} {name}")
