@@ -250,3 +250,12 @@ Evaluación documental contra los criterios vigentes de GitHub Issues al 2026-11
 - **Git:** sin commit ni push. La consolidación Git queda para el cierre del LAB, previa revisión y autorización.
 
 **Continuidad:** LF015-T03 (#17), comenzando por resolver la arquitectura segura de entrada y el preflight bloqueante, sin repetir evidencias QA cerradas.
+
+## LF015-T03 — autenticación temporal de backups
+
+- PASS SYSTEM: `backup.sh` conserva `attached` como modo predeterminado y añade `impersonation` opt-in. En este modo valida cuentas runtime/backup distintas, exige que metadata identifique a runtime y pasa la cuenta backup explícita al uploader; no hay fallback a runtime, ADC local ni claves JSON.
+- PASS SYSTEM: `gcs_json_upload.py` conserva su contrato histórico y, solo cuando lo solicita `backup.sh`, intercambia el token de metadata mediante IAM Credentials `generateAccessToken`. El token temporal se usa en GCS con streaming e `ifGenerationMatch=0`; errores y respuestas de autenticación permanecen sanitizados.
+- PASS QA focalizada: 6/6 casos sintéticos cubren modo histórico, impersonación, rechazo IAM, timeout, tokens malformados, identidad inválida, ausencia de secretos en errores, no-overwrite y uso compartido sin regresión DSR. Compilación Python y `bash -n`: PASS.
+- WARN SYSTEM/ENVIRONMENT: procesos con acceso equivalente a metadata dentro de la misma VM no quedan fuertemente aislados. Deben restringirse usuario del servicio, ejecución/lectura de archivos, acceso Docker y metadata; la eficacia de esos controles no se valida localmente.
+- NOT_VERIFIED ENVIRONMENT: IAM Credentials API, scope VM `cloud-platform`, binding de `iam.serviceAccounts.getAccessToken` limitado a `leadflow-backup`, permisos create-only del bucket e identidad efectiva no se probaron contra GCP. No se usaron credenciales reales ni se autorizó deployment o tráfico.
+- Configuración futura: VM con `leadflow-runtime`; permiso mínimo `iam.serviceAccounts.getAccessToken` sobre la cuenta backup concreta; `leadflow-backup` mantiene solo `storage.objects.create` en el bucket; variables externas `BACKUP_GCP_AUTH_MODE=impersonation`, `BACKUP_RUNTIME_GCP_IDENTITY` y `BACKUP_GCP_IDENTITY`.

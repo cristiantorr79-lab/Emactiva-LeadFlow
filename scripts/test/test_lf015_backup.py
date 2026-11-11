@@ -54,6 +54,34 @@ class GcsJsonUploadTests(unittest.TestCase):
     message=invoke(self.Response(200,token),self.Response(status,b"secret-response")); self.assertNotIn("secret",message); self.assertIn(str(status) if status==403 else "conflict",message)
    self.assertNotIn("secret",invoke(self.Response(200,token),error=TimeoutError("secret timeout")))
    self.assertIn("authentication failed",invoke(self.Response(200,b"{}")))
+ def test_impersonation_uses_temporary_token_only_for_gcs(self):
+  module=self.module()
+  with tempfile.TemporaryDirectory() as temporary:
+   source=Path(temporary)/"artifact"; source.write_bytes(b"encrypted")
+   metadata=self.Connection(self.Response(200,b'{"access_token":"runtime-token"}'))
+   expires=(datetime.now(timezone.utc)+timedelta(hours=1)).isoformat().replace("+00:00","Z")
+   iam=self.Connection(self.Response(200,json.dumps({"accessToken":"backup-token","expireTime":expires}).encode()))
+   session=self.Connection(self.Response(200,location="https://storage.googleapis.com/session?id=2")); upload=self.Connection(self.Response(200))
+   target="leadflow-backup@example-project.iam.gserviceaccount.com"
+   with mock.patch.object(module.http.client,"HTTPConnection",return_value=metadata),mock.patch.object(module.http.client,"HTTPSConnection",side_effect=[iam,session,upload]):
+    self.assertEqual(module.upload_file(source,"gs://bucket-qa/path/artifact",30,target),"gs://bucket-qa/path/artifact")
+   self.assertEqual(iam.request_args[0][0],"POST"); self.assertIn(":generateAccessToken",iam.request_args[0][1])
+   self.assertEqual(iam.request_args[1]["headers"]["Authorization"],"Bearer runtime-token")
+   self.assertEqual(session.request_args[1]["headers"]["Authorization"],"Bearer backup-token")
+   self.assertIn("devstorage.read_write",iam.request_args[1]["body"].decode("ascii")); self.assertEqual(bytes(upload.sent),b"encrypted")
+ def test_impersonation_denials_timeouts_and_malformed_tokens_are_sanitized(self):
+  module=self.module(); target="leadflow-backup@example-project.iam.gserviceaccount.com"
+  with tempfile.TemporaryDirectory() as temporary:
+   source=Path(temporary)/"artifact"; source.write_bytes(b"x")
+   def invoke(iam_response=None,error=None,identity=target):
+    metadata=self.Connection(self.Response(200,b'{"access_token":"runtime-secret"}')); iam=self.Connection(iam_response or self.Response(500,b"secret-response"),request_error=error)
+    with mock.patch.object(module.http.client,"HTTPConnection",return_value=metadata),mock.patch.object(module.http.client,"HTTPSConnection",return_value=iam):
+     with self.assertRaises(Exception) as raised: module.upload_file(source,"gs://bucket-qa/object",2,identity)
+    message=str(raised.exception); self.assertNotIn("secret",message); return message
+   self.assertIn("HTTP 403",invoke(self.Response(403,b"secret denied")))
+   self.assertIn("impersonation failed",invoke(self.Response(200,b'{"accessToken":"secret"}')))
+   self.assertIn("impersonation failed",invoke(error=TimeoutError("secret timeout")))
+   self.assertIn("invalid service account",invoke(identity="invalid@example.test"))
  def test_bundle_sidecar_failure_is_fail_closed(self):
   spec=importlib.util.spec_from_file_location("dsr",ROOT/"scripts"/"backup"/"dsr_restore_evidence.py"); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
   with tempfile.TemporaryDirectory() as temporary:
@@ -318,6 +346,11 @@ class ContractTests(unittest.TestCase):
   self.assertIn('[[ "${BACKUP_COMPOSE_OVERRIDE:-}" == /* && -f "$BACKUP_COMPOSE_OVERRIDE" && -r "$BACKUP_COMPOSE_OVERRIDE" ]] || die compose_override',backup)
   self.assertNotIn('COMPOSE_PROJECT_NAME:-leadflow',backup)
   self.assertLess(backup.index('com.docker.compose.project'),backup.index('docker pause'))
+ def test_backup_impersonation_contract_is_explicit_and_fail_closed(self):
+  backup=(ROOT/"scripts"/"backup"/"backup.sh").read_text(encoding="utf-8")
+  for required in ('BACKUP_GCP_AUTH_MODE:=attached','BACKUP_RUNTIME_GCP_IDENTITY','BACKUP_GCP_IDENTITY','UPLOAD_AUTH_ARGS=(--impersonate-service-account','"$MANAGED_IDENTITY" == "$BACKUP_RUNTIME_GCP_IDENTITY"','"$BACKUP_RUNTIME_GCP_IDENTITY" != "$BACKUP_GCP_IDENTITY"'):
+   self.assertIn(required,backup)
+  self.assertNotIn('BACKUP_GCP_AUTH_MODE:-impersonation',backup); self.assertNotIn('GOOGLE_APPLICATION_CREDENTIALS=',backup)
  def test_qa_probe_contract_and_cleanup_are_scoped(self):
   probe=(ROOT/"scripts"/"backup"/"qa_restore_probe.sh").read_text(encoding="utf-8")
   for required in ("LF015_QA_COMPOSE_PROJECT","LF015_QA_AUTHORIZED_PROJECT","LF015_QA_COMPOSE_OVERRIDE","com.docker.compose.project","docker volume inspect","LF015-QA-PROBE-1","leadflow.claim_event","1|2|2","0|0|0","2|1","cleanup_precondition"):

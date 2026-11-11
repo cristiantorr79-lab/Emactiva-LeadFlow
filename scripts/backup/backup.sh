@@ -34,10 +34,20 @@ for command in python3 node docker tar sha256sum curl timeout; do command -v "$c
 [[ "${GCS_UPLOAD_TIMEOUT_SECONDS:=300}" =~ ^[1-9][0-9]*$ ]] && (( GCS_UPLOAD_TIMEOUT_SECONDS<=3600 )) || die preflight
 [[ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" && -z "${CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE:-}" && -z "${GCE_METADATA_HOST:-}" && -z "${GCE_METADATA_IP:-}" ]] || die preflight
 python3 "$ROOT/scripts/validation/validate_backup_policy.py" >/dev/null || die preflight
-[[ -n "${BACKUP_GCP_IDENTITY:-}" ]] || die identity
+SERVICE_ACCOUNT_PATTERN='^[a-z0-9][a-z0-9-]{4,28}[a-z0-9]@[a-z0-9][a-z0-9-]{4,61}[a-z0-9]\.iam\.gserviceaccount\.com$'
+[[ "${BACKUP_GCP_AUTH_MODE:=attached}" == attached || "$BACKUP_GCP_AUTH_MODE" == impersonation ]] || die identity
+[[ "${BACKUP_GCP_IDENTITY:-}" =~ $SERVICE_ACCOUNT_PATTERN ]] || die identity
 METADATA_URL="http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
 MANAGED_IDENTITY="$(curl --fail --silent --show-error --noproxy '*' --connect-timeout 2 --max-time 5 -H 'Metadata-Flavor: Google' "$METADATA_URL" 2>/dev/null)" || die identity
-[[ "$MANAGED_IDENTITY" == "$BACKUP_GCP_IDENTITY" ]] || die identity
+UPLOAD_AUTH_ARGS=()
+if [[ "$BACKUP_GCP_AUTH_MODE" == attached ]]; then
+  [[ "$MANAGED_IDENTITY" == "$BACKUP_GCP_IDENTITY" ]] || die identity
+else
+  [[ "${BACKUP_RUNTIME_GCP_IDENTITY:-}" =~ $SERVICE_ACCOUNT_PATTERN ]] || die identity
+  [[ "$BACKUP_RUNTIME_GCP_IDENTITY" != "$BACKUP_GCP_IDENTITY" ]] || die identity
+  [[ "$MANAGED_IDENTITY" == "$BACKUP_RUNTIME_GCP_IDENTITY" ]] || die identity
+  UPLOAD_AUTH_ARGS=(--impersonate-service-account "$BACKUP_GCP_IDENTITY")
+fi
 
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/leadflow-backup.XXXXXXXX")"
 chmod 700 "$TMP"
@@ -85,8 +95,8 @@ log encrypt PASS
 
 log transfer START
 DEST="${BACKUP_GCS_BUCKET%/}/$NAME"
-python3 "$ROOT/scripts/backup/gcs_json_upload.py" --source "$TMP/$NAME" --destination "$DEST" --timeout "$GCS_UPLOAD_TIMEOUT_SECONDS" >/dev/null
-python3 "$ROOT/scripts/backup/gcs_json_upload.py" --source "$TMP/$NAME.sha256" --destination "$DEST.sha256" --timeout "$GCS_UPLOAD_TIMEOUT_SECONDS" >/dev/null
+python3 "$ROOT/scripts/backup/gcs_json_upload.py" --source "$TMP/$NAME" --destination "$DEST" --timeout "$GCS_UPLOAD_TIMEOUT_SECONDS" "${UPLOAD_AUTH_ARGS[@]}" >/dev/null
+python3 "$ROOT/scripts/backup/gcs_json_upload.py" --source "$TMP/$NAME.sha256" --destination "$DEST.sha256" --timeout "$GCS_UPLOAD_TIMEOUT_SECONDS" "${UPLOAD_AUTH_ARGS[@]}" >/dev/null
 log transfer PASS
 rm -rf -- "$TMP" || die cleanup
 TMP=""
