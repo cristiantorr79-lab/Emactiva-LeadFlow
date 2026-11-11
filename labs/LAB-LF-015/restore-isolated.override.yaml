@@ -1,0 +1,13 @@
+services:
+  postgres:
+    ports: !reset []
+    networks: [lf015_restore_internal]
+  n8n:
+    ports: !reset []
+    networks: [lf015_restore_internal]
+    depends_on: !reset
+      postgres:
+        condition: service_healthy
+networks:
+  lf015_restore_internal:
+    internal: true

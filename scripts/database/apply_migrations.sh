@@ -23,30 +23,42 @@ psql_command() {
   local user=$1; shift
   "${compose[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U "$user" -d "$postgres_db" "$@"
 }
+psql_query() {
+  psql_command "$@" </dev/null
+}
 psql_file() {
   local user=$1 file=$2
   psql_command "$user" < "$file"
 }
 
-ledger_exists=$(psql_command "$migrator_user" -Atc "SELECT to_regclass('leadflow.schema_migrations') IS NOT NULL;")
+ledger_exists=$(psql_query "$migrator_user" -Atc "SELECT to_regclass('leadflow.schema_migrations') IS NOT NULL;")
 initial_applied=f
 if [ "$ledger_exists" = t ]; then
-  initial_applied=$(psql_command "$migrator_user" -Atc "SELECT EXISTS(SELECT 1 FROM leadflow.schema_migrations WHERE version='001_initial');")
+  initial_applied=$(psql_query "$migrator_user" -Atc "SELECT EXISTS(SELECT 1 FROM leadflow.schema_migrations WHERE version='001_initial');")
 fi
 if [ "$initial_applied" != t ]; then
   psql_file "$bootstrap_user" "$repo_root/database/migrations/001_initial.sql"
   psql_file "$bootstrap_user" "$script_dir/transfer_leadflow_ownership.sql"
 fi
 
-while IFS= read -r migration; do
+mapfile -t migrations < <(find "$repo_root/database/migrations" -maxdepth 1 -type f -name '*.sql' -print | sort)
+[ "${#migrations[@]}" -gt 0 ] || { echo 'No migration files found' >&2; exit 1; }
+expected=0
+for migration in "${migrations[@]}"; do
+  [ "$(basename "$migration" .sql)" = 001_initial ] || expected=$((expected+1))
+done
+processed=0
+for migration in "${migrations[@]}"; do
   version=$(basename "$migration" .sql)
   [ "$version" != 001_initial ] || continue
-  applied=$(psql_command "$migrator_user" -Atc "SELECT EXISTS(SELECT 1 FROM leadflow.schema_migrations WHERE version='$version');")
+  applied=$(psql_query "$migrator_user" -Atc "SELECT EXISTS(SELECT 1 FROM leadflow.schema_migrations WHERE version='$version');")
   if [ "$applied" = t ]; then
     echo "Already applied: $version"
   else
     psql_file "$migrator_user" "$migration"
   fi
-done < <(find "$repo_root/database/migrations" -maxdepth 1 -type f -name '*.sql' -print | sort)
+  processed=$((processed+1))
+done
+[ "$processed" -eq "$expected" ] || { echo "Migration traversal incomplete: processed=$processed expected=$expected" >&2; exit 1; }
 
-psql_command "$migrator_user" -Atc 'SELECT version FROM leadflow.schema_migrations ORDER BY version;'
+psql_query "$migrator_user" -Atc 'SELECT version FROM leadflow.schema_migrations ORDER BY version;'
