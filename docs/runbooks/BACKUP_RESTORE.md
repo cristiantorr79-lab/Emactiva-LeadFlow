@@ -319,3 +319,20 @@ Secuencia de aprovisionamiento y validación posterior, sin ejecutarla desde est
 4. Para QA excepcional aprobada, usar el cambio secuencial de identidad: backup → escritor → administrador → restore, verificando metadata y limpiando secretos en cada transición. Cada mismatch o residuo produce FAIL y detiene la prueba.
 5. Criterio integral: `traffic=DISABLED`, PostgreSQL/n8n íntegros, replay posterior al backup cuando existan eventos, snapshot vigente cubierto, RPO/RTO medidos y cleanup completo. La ejecución QA del 2026-11-10 obtuvo PASS técnico con cero eventos DSR; el cleanup de copias DSR y clave temporal en Cloud Shell, y de temporales y clave DSR en la VM, quedó confirmado en el HANDOFF. El replay posterior, RPO/RTO e igualdad completa permanecen `NOT_VERIFIED`; los dos registros de restauración se conservaron como evidencia.
 6. Detener la VM y devolverla a su identidad operativa aprobada. Los objetos históricos expiran por su lifecycle; el snapshot activo no se elimina hasta decisión autoritativa y ventana de recuperación cumplida. No modificar IAM de `leadflow-backup`.
+
+## Gateway HTTPS productivo por IP estática
+
+Este procedimiento no forma parte de backup/restore y no modifica esos recursos; se conserva aquí como runbook operativo único vigente de LAB-LF-015. Requiere una IP pública estática aprobada apuntando a la VM, firewall de entrada limitado a TCP 443 y salida HTTPS para ACME. No abrir TCP 80: Caddy usa exclusivamente TLS-ALPN-01 sobre 443, sin redirección HTTP. `WEB_GATEWAY_PUBLIC_IP`, `WEB_GATEWAY_BIND_ADDRESS`, proyectos, red Bridge, límites, timeouts y cuotas se suministran externamente. Origin debe ser exactamente `https://emactivaspa.lovable.app` y la ruta `/lead`.
+
+El mapa privado `LF015-WEB-GATEWAY-SECRET-MAP-1` contiene exclusivamente la referencia numérica `projects/<proyecto>/secrets/leadflow-web-bridge-abuse-token/versions/<n>`, la identidad runtime esperada y operación `web-gateway-compose`; nunca el valor. Los proyectos `WEB_GATEWAY_COMPOSE_PROJECT`, `WEB_BRIDGE_COMPOSE_PROJECT` y `LEADFLOW_COMPOSE_PROJECT` deben ser distintos. Con configuración externa protegida y VM autorizada:
+
+```bash
+python3 scripts/admin/web_gateway_with_secrets.py preflight --map /ruta/protegida/web-gateway-map.json
+python3 scripts/admin/web_gateway_with_secrets.py start --map /ruta/protegida/web-gateway-map.json
+```
+
+Preflight ejecuta `docker compose config -q` y un `caddy validate` efímero con `--pull never`, sin `up`, puertos ni emisión; falla cerrado si la imagen fijada no está disponible o la sintaxis es inválida. Start usa `compose.web-gateway.production.yaml`, publica únicamente `${WEB_GATEWAY_BIND_ADDRESS}:443/tcp`, conserva Caddy/rate-gate aislados del Core y Bridge salvo la red externa autorizada, y persiste certificados/estado ACME en el volumen etiquetado `caddy_data`. Caddy 2.11.3 solicita a Let's Encrypt el perfil explícito `shortlived`, deshabilita HTTP-01 y mantiene TLS-ALPN-01. No hay issuer ZeroSSL ni CA interna.
+
+Verificación autorizada: confirmar que solo 443 está publicado; validar cadena pública, confianza, issuer, SAN IP exacta y expiración mediante un cliente TLS independiente; ejecutar 404/405 y una solicitud sintética controlada a `/lead`; comprobar 429 y que no se filtran headers internos. Revisar logs sanitizados y eventos de renovación sin payloads. La renovación es automática mientras `/data` persista, TCP 443 sea alcanzable y la salida ACME funcione; supervisar expiración y repetir el chequeo de SAN/confianza después de cada renovación.
+
+Rollback: conservar evidencia técnica, detener exclusivamente `WEB_GATEWAY_COMPOSE_PROJECT` con el mismo Compose, retirar la regla TCP 443 si fue creada para este gate y mantener el volumen de certificados hasta decisión operativa. No ejecutar `down -v` durante un rollback ordinario, no tocar proyectos Core/Bridge y no habilitar una CA/issuer alternativo. Emisión, confianza y renovación pública permanecen `NOT_VERIFIED` hasta la ejecución autorizada.

@@ -490,3 +490,12 @@ Siguiente paso:
 - Validar EVENT, LEAD, INTERACTION y CRM conforme al gate pendiente.
 - Mantener GCP detenida durante preparacion local.
 - No repetir PASS cerrados sin cambio o regresion.
+
+#### Gateway HTTPS productivo por IP estática
+
+- SYSTEM: `compose.web-gateway.production.yaml` reutiliza Caddy/rate-gate con proyectos separados, red edge interna, red Bridge externa, filesystem read-only, capabilities mínimas y publicación exclusiva `${WEB_GATEWAY_BIND_ADDRESS}:443/tcp`. Caddy queda fijado a `2.11.3-alpine`; `/data` y `/config` son volúmenes persistentes etiquetados. No se publica administración, rate-gate, Bridge, n8n ni PostgreSQL.
+- TLS: `Caddyfile.production` usa IP externa configurable, `default_sni`, Let's Encrypt explícito, perfil `shortlived`, HTTP-01 deshabilitado y TLS-ALPN-01 por 443. No contiene `tls internal`, ZeroSSL, puerto 80 ni redirects HTTP. Conserva `/lead`, POST/OPTIONS, límites/timeouts, sanitización de headers y rate key autoritativa.
+- Secretos: `web_gateway_with_secrets.py` reutiliza `GcpSecretManagerProvider`, acepta solo un mapa versionado con referencia numérica allowlisted a `leadflow-web-bridge-abuse-token`, valida identidad administrada y tres proyectos distintos, resuelve en memoria, ignora valores heredados y ejecuta preflight antes de start. No modifica ni invoca Compose Core/Bridge.
+- PASS SYSTEM: pruebas focalizadas 3/3, compilación Python y `docker compose config -q` con configuración sintética. Preflight sin `up/start`, contrato Origin/ruta, mapa, IP pública, exposición 443 y ausencia de fallback quedaron cubiertos; el preflight exige además `caddy validate --pull never`.
+- NOT_VERIFIED ENVIRONMENT: la imagen `caddy:2.11.3-alpine` no estaba disponible localmente; no se descargó. Por ello `caddy validate`, emisión pública, SAN IP, cadena/confianza Let's Encrypt, firewall, reachability TLS-ALPN-01 y renovación automática requieren validación autorizada. VM/GCP permanecieron sin operar.
+- Siguiente acción: disponibilizar/verificar la imagen fijada en el host autorizado, ejecutar `caddy validate` sin emisión, configurar IP/firewall/mapa externo, correr preflight y solo con PASS ejecutar start; validar 443, SAN/confianza/issuer/expiración y rollback según runbook.
