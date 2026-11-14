@@ -1,5 +1,5 @@
 """Fail-closed development/production configuration validation for LF-002.4."""
-import os, sys
+import argparse, os, sys
 from urllib.parse import urlparse
 
 PRODUCTION_REQUIRED=(
@@ -11,21 +11,38 @@ PRODUCTION_REQUIRED=(
  "CRM_PROVIDER","ENRICHMENT_PROVIDER",
 )
 SECRET_NAMES={"POSTGRES_BOOTSTRAP_PASSWORD","POSTGRES_MIGRATOR_PASSWORD","POSTGRES_APP_PASSWORD","LEADFLOW_WEBHOOK_KEY","N8N_ENCRYPTION_KEY","RECOVERY_CONTEXT_KEY","ADAPTER_SERVICE_KEY","DSR_ADAPTER_SERVICE_KEY","DSR_SUBJECT_KEY","SLACK_WEBHOOK_URL","CRM_API_KEY","ENRICHMENT_API_KEY"}
+RUNTIME_SECRET_NAMES={"POSTGRES_APP_PASSWORD","LEADFLOW_WEBHOOK_KEY","N8N_ENCRYPTION_KEY","RECOVERY_CONTEXT_KEY","ADAPTER_SERVICE_KEY","DSR_SUBJECT_KEY","SLACK_WEBHOOK_URL","CRM_API_KEY","ENRICHMENT_API_KEY"}
+POSTGRES_ADMIN_SECRET_NAMES={"POSTGRES_BOOTSTRAP_PASSWORD","POSTGRES_MIGRATOR_PASSWORD"}
+DSR_PRIVILEGED_SECRET_NAMES={"DSR_ADAPTER_SERVICE_KEY"}
+PRIVILEGED_SECRET_NAMES=POSTGRES_ADMIN_SECRET_NAMES|DSR_PRIVILEGED_SECRET_NAMES
 UNSAFE_HOSTS={"localhost","127.0.0.1","crm-mock","enrichment-mock","slack-mock"}
 
-def validate_config(env):
+def validate_config(env,context="full"):
  errors=[]; app_env=str(env.get("APP_ENV","")).strip().lower()
+ if context not in {"full","runtime","postgres-admin"}: return ["invalid_validation_context"]
  if app_env not in {"development","production"}: return ["invalid_app_env"]
  if app_env=="development": return errors
- for name in PRODUCTION_REQUIRED:
+ if context=="postgres-admin":
+  required=("POSTGRES_DB","POSTGRES_BOOTSTRAP_USER","POSTGRES_BOOTSTRAP_PASSWORD","POSTGRES_MIGRATOR_USER","POSTGRES_MIGRATOR_PASSWORD","POSTGRES_APP_USER","POSTGRES_APP_PASSWORD")
+ else:
+  required=PRODUCTION_REQUIRED if context=="full" else tuple(name for name in PRODUCTION_REQUIRED if name not in PRIVILEGED_SECRET_NAMES)
+ for name in required:
   if not str(env.get(name,"")).strip(): errors.append("missing_"+name.lower())
- for name in ("POSTGRES_BOOTSTRAP_PASSWORD","POSTGRES_MIGRATOR_PASSWORD","POSTGRES_APP_PASSWORD","LEADFLOW_WEBHOOK_KEY","N8N_ENCRYPTION_KEY","RECOVERY_CONTEXT_KEY","ADAPTER_SERVICE_KEY","DSR_ADAPTER_SERVICE_KEY","DSR_SUBJECT_KEY"):
+ strong_names=("POSTGRES_BOOTSTRAP_PASSWORD","POSTGRES_MIGRATOR_PASSWORD","POSTGRES_APP_PASSWORD","LEADFLOW_WEBHOOK_KEY","N8N_ENCRYPTION_KEY","RECOVERY_CONTEXT_KEY","ADAPTER_SERVICE_KEY","DSR_ADAPTER_SERVICE_KEY","DSR_SUBJECT_KEY")
+ for name in strong_names:
+  if context=="runtime" and name in PRIVILEGED_SECRET_NAMES: continue
+  if context=="postgres-admin" and name not in POSTGRES_ADMIN_SECRET_NAMES|{"POSTGRES_APP_PASSWORD"}: continue
   value=str(env.get(name,""))
   if value and len(value)<32: errors.append("weak_"+name.lower())
+ if context=="runtime":
+  for name in PRIVILEGED_SECRET_NAMES:
+   if str(env.get(name,"")).strip(): errors.append("forbidden_"+name.lower())
  if env.get("POSTGRES_MIGRATOR_USER")==env.get("POSTGRES_APP_USER"): errors.append("shared_postgres_role")
- if env.get("POSTGRES_MIGRATOR_PASSWORD")==env.get("POSTGRES_APP_PASSWORD"): errors.append("shared_postgres_password")
  if len({env.get("POSTGRES_BOOTSTRAP_USER"),env.get("POSTGRES_MIGRATOR_USER"),env.get("POSTGRES_APP_USER")})<3: errors.append("shared_postgres_role")
- if len({env.get("POSTGRES_BOOTSTRAP_PASSWORD"),env.get("POSTGRES_MIGRATOR_PASSWORD"),env.get("POSTGRES_APP_PASSWORD")})<3: errors.append("shared_postgres_password")
+ if context in {"full","postgres-admin"}:
+  if env.get("POSTGRES_MIGRATOR_PASSWORD")==env.get("POSTGRES_APP_PASSWORD"): errors.append("shared_postgres_password")
+  if len({env.get("POSTGRES_BOOTSTRAP_PASSWORD"),env.get("POSTGRES_MIGRATOR_PASSWORD"),env.get("POSTGRES_APP_PASSWORD")})<3: errors.append("shared_postgres_password")
+ if context=="postgres-admin": return sorted(set(errors))
  if env.get("CRM_PROVIDER")!="hubspot": errors.append("invalid_crm_provider")
  elif not str(env.get("CRM_API_KEY","")).strip(): errors.append("missing_crm_api_key")
  if env.get("ENRICHMENT_PROVIDER")!="hunter": errors.append("invalid_enrichment_provider")
@@ -39,8 +56,11 @@ def validate_config(env):
  if host and ("://" in host or host in UNSAFE_HOSTS or "/" in host): errors.append("unsafe_public_webhook_host")
  return sorted(set(errors))
 
-def main():
- errors=validate_config(os.environ)
+def main(argv=None):
+ parser=argparse.ArgumentParser(add_help=False)
+ parser.add_argument("--context",choices=("full","runtime","postgres-admin"),default="full")
+ args=parser.parse_args(argv)
+ errors=validate_config(os.environ,args.context)
  if errors:
   print("Deployment configuration: FAIL ("+",".join(errors)+")")
   return 1

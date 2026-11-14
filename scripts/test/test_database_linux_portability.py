@@ -34,7 +34,7 @@ def missing_config_fails_closed() -> bool:
         fake_docker.chmod(0o755)
         environment = {**os.environ, "PATH": directory + os.pathsep + os.environ.get("PATH", "")}
         result = subprocess.run([BASH, str(sync)], text=True, capture_output=True, check=False, env=environment)
-        return result.returncode != 0 and "Required PostgreSQL container variable is missing" in result.stderr
+        return result.returncode == 31 and "error_id=LF015-PG-ROLE-CONFIG" in result.stderr
 
 
 def migration_fixture(directory: str) -> tuple[Path, Path]:
@@ -99,7 +99,27 @@ def incomplete_walk_fails_closed() -> bool:
             encoding="utf-8",
         )
         result = run_fixture(fixture / "scripts/database", binary)
-        return result.returncode != 0 and "Migration traversal incomplete: processed=2 expected=3" in result.stderr
+        return result.returncode == 34 and "error_id=LF015-PG-MIGRATION-TRAVERSAL" in result.stderr
+
+
+def producer_failure_is_preserved() -> bool:
+    with tempfile.TemporaryDirectory() as directory:
+        fixture, binary = migration_fixture(directory)
+        docker = binary / "docker"
+        docker.write_text(
+            "#!/usr/bin/env bash\n"
+            "if [[ \"$*\" == *'for name in POSTGRES_DB'* ]]; then echo synthetic-secret >&2; exit 47; fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        docker.chmod(0o755)
+        result = run_fixture(fixture / "scripts/database", binary)
+        return (
+            result.returncode == 47
+            and "phase=configuration operation=read" in result.stderr
+            and "error_id=LF015-PG-MIGRATION-CONFIG" in result.stderr
+            and "synthetic-secret" not in result.stderr
+        )
 
 checks = {
     "bash_syntax_sync": bool(BASH) and subprocess.run([BASH, "-n", str(sync)], check=False).returncode == 0,
@@ -121,6 +141,7 @@ checks = {
     "remaining_migrations_use_migrator": "psql_file \"$migrator_user\" \"$migration\"" in apply_text,
     "stdin_cannot_truncate_migration_walk": bool(BASH) and stdin_consumption_does_not_truncate_migrations(),
     "migration_walk_count_fails_closed": bool(BASH) and incomplete_walk_fails_closed(),
+    "producer_failure_code_preserved_and_sanitized": bool(BASH) and producer_failure_is_preserved(),
 }
 for name, passed in checks.items():
     print(f"{'PASS' if passed else 'FAIL'} {name}")

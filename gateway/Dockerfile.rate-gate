@@ -1,0 +1,5 @@
+FROM python:3.14.3-slim-bookworm
+WORKDIR /app
+COPY rate_gate.py /app/rate_gate.py
+USER 65534:65534
+ENTRYPOINT ["python", "/app/rate_gate.py"]

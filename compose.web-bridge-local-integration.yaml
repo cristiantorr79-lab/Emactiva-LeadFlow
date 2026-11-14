@@ -1,0 +1,60 @@
+services:
+  siteverify-mock:
+    image: caddy:2.10.2-alpine
+    profiles: [web-bridge]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./scripts/test/fixtures/siteverify.Caddyfile:/etc/caddy/Caddyfile:ro
+      - siteverify_data:/data
+      - siteverify_config:/config
+      - siteverify_public_ca:/public-ca
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      integration:
+        aliases:
+          - challenges.cloudflare.com
+    healthcheck:
+      test: [CMD-SHELL, "cp /data/caddy/pki/authorities/local/root.crt /public-ca/root.crt && chmod 644 /public-ca/root.crt && wget --no-check-certificate --quiet --spider https://challenges.cloudflare.com/healthz"]
+      interval: 1s
+      timeout: 2s
+      retries: 20
+
+  web-bridge:
+    environment:
+      SSL_CERT_FILE: /siteverify-ca/root.crt
+      WEB_BRIDGE_TURNSTILE_PROXY_URL: ""
+    depends_on:
+      siteverify-mock:
+        condition: service_healthy
+    volumes:
+      - siteverify_public_ca:/siteverify-ca:ro
+    networks:
+      - integration
+
+networks:
+  integration:
+    internal: true
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-local-siteverify
+
+volumes:
+  siteverify_data:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-local-siteverify-ca
+  siteverify_config:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-local-siteverify-config
+
+  siteverify_public_ca:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-local-public-ca

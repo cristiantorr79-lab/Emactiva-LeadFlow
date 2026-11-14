@@ -1,0 +1,50 @@
+services:
+  postgres:
+    restart: "no"
+    ports: !reset []
+  n8n:
+    restart: "no"
+    ports: !reset []
+    volumes: !override
+      - leadflow_n8n_data:/home/node/.n8n
+      - ./workflows:/opt/leadflow/workflows:ro
+      - ${LEADFLOW_N8N_LOCAL_DIR:?LEADFLOW_N8N_LOCAL_DIR is required}:/opt/leadflow/local:ro
+  crm-mock:
+    restart: "no"
+    ports: !reset []
+  enrichment-mock:
+    restart: "no"
+    ports: !reset []
+  slack-mock:
+    restart: "no"
+    ports: !reset []
+  adapters:
+    restart: "no"
+    ports: !reset []
+    environment:
+      APP_ENV: development
+      CRM_PROVIDER: mock
+      ENRICHMENT_PROVIDER: mock
+      CRM_UPSTREAM_URL: http://crm-mock:8080
+      ENRICHMENT_UPSTREAM_URL: http://enrichment-mock:8080
+      ALERT_UPSTREAM_URL: http://slack-mock:8080/webhook
+      CRM_API_KEY: ""
+      ENRICHMENT_API_KEY: ""
+
+networks:
+  default:
+    name: ${LF015_CORE_QA_NETWORK:?LF015_CORE_QA_NETWORK is required}
+    internal: true
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: core-qa-network
+
+volumes:
+  leadflow_postgres_data:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: core-qa-postgres
+  leadflow_n8n_data:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: core-qa-n8n

@@ -28,6 +28,22 @@ Email: trim → lowercase → formato; máximo 254 caracteres, una sola @, parte
 
 `interaction` es opcional y admite exclusivamente `interest` y `message`. `interest` es string de hasta 100 caracteres y debe pertenecer, tras trim, a `LEADFLOW_ALLOWED_INTERESTS`. `message` es string de hasta 2000 caracteres; recibe solo trim exterior y conserva contenido interno, saltos y Unicode. Strings vacíos tras trim se omiten, tipos incorrectos no se coercionan, campos desconocidos no se propagan y una interaction vacía equivale a omitida. Su contenido no forma parte de la identidad EVENT ni se incorpora al LEAD.
 
+### Puente web comercial
+
+El puente independiente acepta exclusivamente un objeto JSON con `nombre`, `apellido`, `email`, `negocio`, `telefono`, `interes` y `mensaje`. `email` e `interes` son obligatorios; los otros cinco campos son opcionales. Todos los valores presentes deben ser strings. Nombre, apellido, negocio y teléfono admiten hasta 200 caracteres; email hasta 254, interés hasta 100 y mensaje hasta 2000. Campos desconocidos, claves JSON duplicadas, tipos incorrectos, controles no permitidos, email inválido e interés fuera de `LEADFLOW_ALLOWED_INTERESTS` se rechazan sin invocar LeadFlow.
+
+La traducción fija es `nombre→lead.first_name`, `apellido→lead.last_name`, `negocio→lead.company`, `telefono→lead.phone`, `interes→interaction.interest` y `mensaje→interaction.message`. `source` procede exclusivamente de `WEB_BRIDGE_SOURCE` y debe pertenecer a `LEADFLOW_ALLOWED_SOURCES`. El cliente no puede proporcionarlo. Los opcionales vacíos tras trim se omiten.
+
+Cada envío exige `X-LeadFlow-Submission-Id`, UUID v4 canónico en minúsculas generado por el cliente al crear la consulta. El cliente debe conservarlo al reintentar esa misma consulta y generar otro para una consulta nueva, incluso si su contenido coincide. No se admite email, teléfono, nombre ni texto libre como identificador.
+
+Cada intento exige además `X-Turnstile-Token` como entrada independiente del JSON comercial. El puente valida el token mediante el endpoint HTTPS Siteverify de Cloudflare antes de invocar LeadFlow y exige `success=true`, un `hostname` perteneciente a `WEB_BRIDGE_TURNSTILE_HOSTNAMES` y, cuando se configura, coincidencia exacta con `WEB_BRIDGE_TURNSTILE_ACTION`. Producción no admite desactivar esta verificación. Un reintento conserva el mismo submission ID y payload, pero debe poder aportar un token renovado. El token, la Secret Key y la respuesta de Siteverify no se incorporan a EVENT/LEAD/INTERACTION, no se reenvían al webhook y no aparecen en respuestas ni diagnósticos.
+
+`event_id` es `web_` seguido de HMAC-SHA-256 sobre `LF015-WEB-EVENT-ID-V1 NUL || submission_id`, usando `WEB_BRIDGE_EVENT_ID_KEY`, una clave privada del servidor distinta de las demás. La separación de propósito evita reutilizar directamente el mismo mensaje criptográfico en otros usos. El payload no participa en la identidad: el mismo UUID siempre produce el mismo evento y dos UUID distintos producen eventos distintos. La clave debe permanecer estable mientras puedan existir reintentos; su rotación requiere una transición operativa.
+
+LeadFlow deduplica de forma segura una reutilización del UUID aunque el contenido cambie, porque ambos envíos llegan con el mismo `event_id`; el segundo no crea otro evento ni repite efectos. Sin embargo, el puente no puede demostrar ni rechazar que el contenido cambió entre solicitudes porque no conserva un binding durable. Una garantía de rechazo exige un registro atómico independiente con `event_id`, fingerprint HMAC del contenido y retención aprobada. Una caché en memoria no cumple esa garantía y no forma parte del contrato actual.
+
+El puente llama al webhook interno con `X-LeadFlow-Key` obtenido únicamente de configuración del servidor. Su respuesta pública confirma solo aceptación genérica; nunca retransmite respuestas, identificadores, payloads o errores internos. En production exige origen HTTPS permitido y atestación secreta de un control externo de abuso. CORS/origen no son autenticación ni rate limiting, y la presencia de configuración no demuestra que la frontera HTTPS o el control externo estén operativos.
+
 ## Estados y etapas
 
 Estados: `received`, `processing`, `duplicate`, `retrying`, `success`, `failed`.

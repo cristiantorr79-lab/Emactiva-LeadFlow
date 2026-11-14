@@ -7,7 +7,11 @@ foreach ($name in @('APP_ENV','POSTGRES_DB','POSTGRES_APP_USER','POSTGRES_APP_PA
 if ($env:APP_ENV -eq 'development' -and ($env:CRM_PROVIDER -cne 'mock' -or $env:ENRICHMENT_PROVIDER -cne 'mock')) {
     throw 'Unsafe provider configuration for development.'
 }
-$localDir = Join-Path $PSScriptRoot '..\..\.local\n8n'
+$localDir = if ([string]::IsNullOrWhiteSpace($env:LEADFLOW_N8N_LOCAL_DIR)) {
+    Join-Path $PSScriptRoot '..\..\.local\n8n'
+} else {
+    $env:LEADFLOW_N8N_LOCAL_DIR
+}
 $credentialPath = Join-Path $localDir 'postgres-credential.json'
 $credential = ConvertTo-Json -InputObject @(@{id='leadflow-postgres';name='LeadFlow PostgreSQL';type='postgres';data=@{host='postgres';database=$env:POSTGRES_DB;user=$env:POSTGRES_APP_USER;password=$env:POSTGRES_APP_PASSWORD;port=5432;ssl='disable'}}) -Depth 5
 docker compose up -d n8n
@@ -29,6 +33,12 @@ docker compose restart n8n | Out-Null
 $port = if ($env:N8N_PORT) { $env:N8N_PORT } else { '5680' }
 $webhookReady = $false
 for ($attempt = 1; $attempt -le 60; $attempt++) {
+    if ($env:LEADFLOW_N8N_PROBE_MODE -eq 'container') {
+        docker compose exec -T n8n node -e "fetch('http://127.0.0.1:5678/webhook/leadflow',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>process.exit(r.status===401?0:1)).catch(()=>process.exit(2))"
+        if ($LASTEXITCODE -eq 0) { $webhookReady = $true; break }
+        Start-Sleep -Seconds 1
+        continue
+    }
     try {
         Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/webhook/leadflow" -Method POST -ContentType 'application/json' -Body '{}' -TimeoutSec 2 | Out-Null
     } catch {

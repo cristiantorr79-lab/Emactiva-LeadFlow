@@ -1,0 +1,80 @@
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    profiles: [web-gateway-local]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${WEB_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${WEB_GATEWAY_HTTPS_PORT:?WEB_GATEWAY_HTTPS_PORT is required}:8443"
+    environment:
+      WEB_GATEWAY_HOST: ${WEB_GATEWAY_HOST:?WEB_GATEWAY_HOST is required}
+      WEB_GATEWAY_MAX_BODY_BYTES: ${WEB_GATEWAY_MAX_BODY_BYTES:?WEB_GATEWAY_MAX_BODY_BYTES is required}
+      WEB_GATEWAY_REQUEST_TIMEOUT_SECONDS: ${WEB_GATEWAY_REQUEST_TIMEOUT_SECONDS:?WEB_GATEWAY_REQUEST_TIMEOUT_SECONDS is required}
+      WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS: ${WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS:?WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS is required}
+    volumes:
+      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - ingress
+      - edge
+
+  rate-gate:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile.rate-gate
+    image: leadflow-web-gateway-rate-gate:python-3.14.3
+    profiles: [web-gateway-local]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      WEB_GATEWAY_POLICY_BIND_HOST: 0.0.0.0
+      WEB_GATEWAY_POLICY_PORT: 8081
+      WEB_GATEWAY_PUBLIC_PATH: ${WEB_GATEWAY_PUBLIC_PATH:?WEB_GATEWAY_PUBLIC_PATH is required}
+      WEB_GATEWAY_ALLOWED_ORIGINS: ${WEB_GATEWAY_ALLOWED_ORIGINS:?WEB_GATEWAY_ALLOWED_ORIGINS is required}
+      WEB_GATEWAY_UPSTREAM_URL: ${WEB_GATEWAY_UPSTREAM_URL:?WEB_GATEWAY_UPSTREAM_URL is required}
+      WEB_GATEWAY_MAX_BODY_BYTES: ${WEB_GATEWAY_MAX_BODY_BYTES:?WEB_GATEWAY_MAX_BODY_BYTES is required}
+      WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS: ${WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS:?WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS is required}
+      WEB_GATEWAY_RATE_REQUESTS: ${WEB_GATEWAY_RATE_REQUESTS:?WEB_GATEWAY_RATE_REQUESTS is required}
+      WEB_GATEWAY_RATE_WINDOW_SECONDS: ${WEB_GATEWAY_RATE_WINDOW_SECONDS:?WEB_GATEWAY_RATE_WINDOW_SECONDS is required}
+      WEB_GATEWAY_RATE_MAX_KEYS: ${WEB_GATEWAY_RATE_MAX_KEYS:?WEB_GATEWAY_RATE_MAX_KEYS is required}
+      WEB_BRIDGE_ABUSE_TOKEN: ${WEB_BRIDGE_ABUSE_TOKEN:?WEB_BRIDGE_ABUSE_TOKEN is required}
+    expose:
+      - "8081"
+    networks:
+      - edge
+      - bridge
+
+networks:
+  ingress:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-gateway-local-ingress
+  edge:
+    internal: true
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-gateway-local-edge
+  bridge:
+    external: true
+    name: ${WEB_BRIDGE_UPSTREAM_NETWORK:?WEB_BRIDGE_UPSTREAM_NETWORK is required}
+
+volumes:
+  caddy_data:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-gateway-local-caddy-data
+  caddy_config:
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-gateway-local-caddy-config

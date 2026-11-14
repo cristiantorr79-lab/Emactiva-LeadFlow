@@ -1,0 +1,66 @@
+services:
+  qa-egress:
+    build:
+      context: ./bridge
+      dockerfile: Dockerfile.qa-egress
+    image: leadflow-web-bridge-qa-egress:python-3.14.3
+    profiles: [qa-receiver]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-qa-egress
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      QA_EGRESS_BIND_HOST: 0.0.0.0
+      QA_EGRESS_BIND_PORT: ${QA_EGRESS_PORT:?QA_EGRESS_PORT is required}
+      QA_EGRESS_TIMEOUT_SECONDS: ${QA_EGRESS_TIMEOUT_SECONDS:-15}
+      QA_EGRESS_MAX_TUNNEL_BYTES: ${QA_EGRESS_MAX_TUNNEL_BYTES:-131072}
+    expose:
+      - "${QA_EGRESS_PORT}"
+    networks:
+      - qa
+      - egress
+
+  qa-receiver:
+    build:
+      context: ./bridge
+      dockerfile: Dockerfile.qa-receiver
+    image: leadflow-web-bridge-qa-receiver:python-3.14.3
+    profiles: [qa-receiver]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-qa-receiver
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      QA_RECEIVER_BIND_HOST: 0.0.0.0
+      QA_RECEIVER_PORT: ${QA_RECEIVER_PORT:?QA_RECEIVER_PORT is required}
+      QA_RECEIVER_PATH: ${QA_RECEIVER_PATH:?QA_RECEIVER_PATH is required}
+      QA_RECEIVER_MAX_BODY_BYTES: ${QA_RECEIVER_MAX_BODY_BYTES:-16384}
+      QA_RECEIVER_TIMEOUT_SECONDS: ${QA_RECEIVER_TIMEOUT_SECONDS:-5}
+      LEADFLOW_WEBHOOK_KEY: ${LEADFLOW_WEBHOOK_KEY:?LEADFLOW_WEBHOOK_KEY is required}
+    expose:
+      - "${QA_RECEIVER_PORT}"
+    networks:
+      - qa
+
+networks:
+  qa:
+    name: ${WEB_BRIDGE_QA_NETWORK:?WEB_BRIDGE_QA_NETWORK is required}
+    internal: true
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-qa-network
+  egress:
+    name: ${WEB_BRIDGE_QA_EGRESS_NETWORK:?WEB_BRIDGE_QA_EGRESS_NETWORK is required}
+    labels:
+      com.emactiva.lab: LAB-LF-015
+      com.emactiva.component: web-bridge-qa-egress-network

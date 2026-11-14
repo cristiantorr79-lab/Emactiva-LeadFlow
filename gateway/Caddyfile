@@ -1,0 +1,47 @@
+{
+	admin off
+	auto_https disable_redirects
+	skip_install_trust
+	log {
+		output stderr
+		level ERROR
+	}
+	servers :8443 {
+		protocols h1 h2
+		max_header_size 16KiB
+		timeouts {
+			read_header {$WEB_GATEWAY_REQUEST_TIMEOUT_SECONDS}s
+			read_body {$WEB_GATEWAY_REQUEST_TIMEOUT_SECONDS}s
+			write {$WEB_GATEWAY_REQUEST_TIMEOUT_SECONDS}s
+			idle {$WEB_GATEWAY_REQUEST_TIMEOUT_SECONDS}s
+		}
+	}
+}
+
+(lead_gate) {
+	request_body {
+		max_size {$WEB_GATEWAY_MAX_BODY_BYTES}
+	}
+	reverse_proxy rate-gate:8081 {
+		header_up -X-LeadFlow-Abuse-Token
+		header_up X-LeadFlow-Rate-Key {http.request.remote.host}
+		transport http {
+			dial_timeout {$WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS}s
+			response_header_timeout {$WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS}s
+		}
+	}
+}
+
+https://{$WEB_GATEWAY_HOST}:8443 {
+	tls internal
+
+	handle /lead {
+		@allowed method POST OPTIONS
+		handle @allowed {
+			import lead_gate
+		}
+		respond 405
+	}
+
+	respond 404
+}

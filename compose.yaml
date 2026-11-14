@@ -204,6 +204,18 @@ services:
       retries: 20
       start_period: 3s
 
+  adapters-dsr-admin:
+    extends:
+      service: adapters
+    profiles: [administration]
+    restart: "no"
+    environment:
+      DSR_ADAPTER_SERVICE_KEY: ${DSR_ADAPTER_SERVICE_KEY:-}
+      ADAPTER_ALLOWED_OPERATIONS: ${DSR_ADMIN_ALLOWED_OPERATIONS:-crm.dsr_locate,crm.dsr_export,crm.dsr_correct}
+    command: ["sh", "-eu", "-c", "test $${#DSR_ADAPTER_SERVICE_KEY} -ge 32; exec python /app/server.py"]
+    ports: !override
+      - "127.0.0.1:${DSR_ADMIN_ADAPTER_PORT:-5686}:8080"
+
 volumes:
   leadflow_postgres_data:
   leadflow_n8n_data:

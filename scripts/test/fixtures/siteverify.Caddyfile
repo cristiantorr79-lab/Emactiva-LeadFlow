@@ -1,0 +1,22 @@
+{
+	admin off
+	auto_https disable_redirects
+	skip_install_trust
+	log {
+		output stderr
+		level ERROR
+	}
+}
+
+https://challenges.cloudflare.com {
+	tls internal
+
+	@siteverify {
+		method POST
+		path /turnstile/v0/siteverify
+	}
+	respond @siteverify `{"success":true,"hostname":"form.example.invalid","action":"lead_submit"}` 200
+
+	respond /healthz 200
+	respond 404
+}
