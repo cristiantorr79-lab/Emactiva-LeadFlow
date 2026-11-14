@@ -17,7 +17,14 @@ from urllib.parse import urlsplit
 
 
 PATH_RE = re.compile(r"/[A-Za-z0-9/_-]{1,100}")
-FORWARDED_HEADERS = ("Content-Type", "Origin", "X-LeadFlow-Submission-Id", "X-Turnstile-Token")
+FORWARDED_HEADERS = (
+    "Content-Type", "Origin", "X-LeadFlow-Submission-Id", "X-Turnstile-Token",
+    "Access-Control-Request-Method", "Access-Control-Request-Headers",
+)
+FORWARDED_RESPONSE_HEADERS = (
+    "Content-Type", "Access-Control-Allow-Origin", "Access-Control-Allow-Methods",
+    "Access-Control-Allow-Headers", "Vary", "Retry-After",
+)
 
 
 class GateError(RuntimeError):
@@ -179,7 +186,7 @@ class GateHandler(BaseHTTPRequestHandler):
             response = connection.getresponse(); raw = response.read(config.max_body_bytes + 1)
             if len(raw) > config.max_body_bytes:
                 raise OSError("upstream response too large")
-            safe = {name: value for name in ("Content-Type", "Access-Control-Allow-Origin", "Vary", "Retry-After")
+            safe = {name: value for name in FORWARDED_RESPONSE_HEADERS
                     if (value := response.getheader(name))}
             self.send_response(response.status)
             for name, value in safe.items(): self.send_header(name, value)

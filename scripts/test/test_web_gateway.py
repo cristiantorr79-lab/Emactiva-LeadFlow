@@ -31,6 +31,14 @@ class UpstreamHandler(BaseHTTPRequestHandler):
     def _capture(self):
         length = int(self.headers.get("Content-Length", "0"))
         self.__class__.requests.append((self.command, dict(self.headers), self.rfile.read(length)))
+        if self.command == "OPTIONS":
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", ""))
+            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-LeadFlow-Submission-Id, X-Turnstile-Token")
+            self.send_header("Vary", "Origin")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers(); return
         body = b'{"ok":true,"status":"received_qa"}'
         self.send_response(202); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
@@ -63,7 +71,40 @@ class WebGatewayTests(unittest.TestCase):
         connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=2)
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse(); raw = response.read(); connection.close()
-        return response.status, dict(response.headers), json.loads(raw)
+        return response.status, dict(response.headers), json.loads(raw) if raw else None
+
+    def test_cors_preflight_is_allowlisted_end_to_end_without_rate_consumption(self):
+        requested = {
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type, x-leadflow-submission-id, x-turnstile-token",
+            "X-Arbitrary-Client-Header": "not-forwarded",
+            "X-LeadFlow-Abuse-Token": "attacker-value",
+        }
+        for _ in range(3):
+            status, headers, body = self.request("OPTIONS", body=b"", extra=requested)
+            self.assertEqual((status, body), (204, None))
+            self.assertEqual(headers.get("Access-Control-Allow-Origin"), "https://form.example.invalid")
+            self.assertEqual(headers.get("Access-Control-Allow-Methods"), "POST, OPTIONS")
+            self.assertEqual(headers.get("Access-Control-Allow-Headers"), "Content-Type, X-LeadFlow-Submission-Id, X-Turnstile-Token")
+            self.assertEqual(headers.get("Vary"), "Origin")
+            self.assertEqual(headers.get("Cache-Control"), "no-store")
+        method, forwarded, _ = UpstreamHandler.requests[0]
+        self.assertEqual(method, "OPTIONS")
+        self.assertEqual(forwarded.get("Access-Control-Request-Method"), "POST")
+        self.assertEqual(forwarded.get("Access-Control-Request-Headers"), requested["Access-Control-Request-Headers"])
+        self.assertNotIn("X-Arbitrary-Client-Header", forwarded)
+        self.assertEqual(forwarded.get("X-LeadFlow-Abuse-Token"), self.token)
+        self.assertEqual(self.request()[0], 202)
+        self.assertEqual(self.request()[0], 202)
+        self.assertEqual(self.request()[0], 429)
+
+    def test_cors_does_not_authorize_unapproved_origin_method_or_headers(self):
+        status, headers, _ = self.request("OPTIONS", origin="https://evil.example.invalid", body=b"", extra={"Access-Control-Request-Method":"POST"})
+        self.assertEqual(status, 403); self.assertNotIn("Access-Control-Allow-Origin", headers)
+        status, headers, _ = self.request("OPTIONS", body=b"", extra={"Access-Control-Request-Method":"DELETE","Access-Control-Request-Headers":"x-arbitrary-client-header"})
+        self.assertEqual(status, 204)
+        self.assertNotIn("DELETE", headers.get("Access-Control-Allow-Methods", ""))
+        self.assertNotIn("x-arbitrary-client-header", headers.get("Access-Control-Allow-Headers", "").lower())
 
     def test_internal_header_spoofing_is_removed_and_boundary_token_is_injected(self):
         status, _, _ = self.request(extra={"X-LeadFlow-Abuse-Token": "attacker-value"})
