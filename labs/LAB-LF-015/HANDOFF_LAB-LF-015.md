@@ -672,9 +672,9 @@ done
 
 En Slack (interfaz visual), exigir exactamente una alerta técnica `lf_exec_lf015_t03_alert_gate`, sin email/payload/token; registrar hora y eliminarla solo si la política del canal lo autoriza. En HubSpot (interfaz visual), revisar **Settings → Notifications** y **Automation/Workflows**: registrar si existe una notificación nativa configurable para creación de contacto/ticket. No habilitarla ni crear workflow; ausencia queda WARN/NOT_VERIFIED para #18, no FAIL SYSTEM.
 
-#### Bloque A4 — restore aislado del backup 2026-11-14 (Cloud Shell + SSH VM)
+#### Bloque A4 — restore aislado del backup 2026-11-14 (HISTÓRICO/SUPERADO)
 
-Justificación: resta por acreditar resiliencia ambiental del artefacto productivo; se reutilizan `preflight_restore.py`, `restore.sh` y el override aislado. Requiere ventana y autorización separadas, identidad restore, bundle DSR independiente y claves externas.
+**No ejecutar este bloque como procedimiento vigente.** Se conserva como trazabilidad del plan previo; C4/C5.2 documentan la ejecución autorizada con el backup prospectivo del 15/11 ligado a la autoridad DSR. En su momento restaba acreditar resiliencia ambiental del artefacto productivo reutilizando `preflight_restore.py`, `restore.sh` y el override aislado.
 
 ```bash
 # Google Cloud Shell, read-only: seleccionar URI exacta del 14/11 y sus sidecars; no descargar.
@@ -704,7 +704,7 @@ Un preflight RC=2 solo puede continuar si la única salida NOT_VERIFIED es el co
 3. **PostgreSQL (SSH VM):** usar exclusivamente `scripts/admin/cleanup_lf015_postgres.py`. Dry-run exige exactamente los siete IDs, 27 eventos, cero contextos/holds/dependencias ajenas y ninguna ejecución adicional. Apply exige el SHA-256 aprobado y ejecuta bajo el migrator una transacción serializable con advisory/table locks; elimina solo eventos/contextos/ejecuciones autorizados, conserva DSR y es idempotente. No cambia retención ni usa TRUNCATE/DDL.
 4. **n8n/Docker (SSH VM):** no eliminar el workflow productivo. Para cada proyecto QA aprobado explícitamente, verificar labels y ejecutar individualmente `docker compose --project-name <PROYECTO-QA-EXACTO> -f <COMPOSE-QA-EXACTO> down -v --remove-orphans`; abortar si comparte red/volumen con `emactiva-leadflow`.
 5. **GCS (Google Cloud Shell):** guardar tres URI exactos en una lista revisada, exigir conteo 3 y ejecutar `gcloud storage rm "${uris[0]}" "${uris[1]}" "${uris[2]}"` únicamente con identidad administrativa. Preservar backups cifrados, `.sha256`, evidencias DSR y lifecycle.
-6. **Post-check y nueva línea base (SSH VM):** seis contenedores productivos healthy, workflow único, cero recursos QA aprobados, conteos PostgreSQL/HubSpot reconciliados, Slack limpio según política y tres preflight ausentes. Después ejecutar una sola vez `bash scripts/backup/backup.sh` bajo la identidad/configuración oficial; exigir artefacto cifrado + checksum create-only y registrar timestamp/hash sin descargar datos.
+6. **Post-check y nueva línea base (SSH VM):** seis contenedores productivos en ejecución: PostgreSQL, Adapters y n8n con healthcheck `healthy`; Web Bridge, Rate Gate y Caddy sin healthcheck configurado, pero en estado `running`. Exigir además workflow único, cero recursos QA aprobados, conteos PostgreSQL/HubSpot reconciliados, Slack limpio según política y tres preflight ausentes. Después ejecutar una sola vez `bash scripts/backup/backup.sh` bajo la identidad/configuración oficial; exigir artefacto cifrado + checksum create-only y registrar timestamp/hash sin descargar datos.
 
 **Gate de autorización:** ninguna instrucción destructiva de este bloque se ejecuta junto con el dry-run. La autorización debe adjuntar el manifiesto exacto de IDs/proyectos/volúmenes/URI y aprobar cada clase de eliminación. Producción, secretos, migraciones, roles, DSR, retención, backups y rollback quedan fuera del cleanup.
 
@@ -765,9 +765,15 @@ python3 scripts/admin/cleanup_lf015_postgres.py apply \
 python3 scripts/admin/cleanup_lf015_postgres.py verify \
   --manifest "$STATE/postgres.json" --authorize-manifest-sha256 "$PG_APPROVED"
 
-# 4. Post-check minimizado. Debe devolver seis servicios healthy.
+# 4. Post-check minimizado: seis servicios en tres proyectos Compose.
 test "$(docker ps --filter label=com.docker.compose.project=emactiva-leadflow \
-  --filter health=healthy --format '{{.ID}}' | wc -l)" -eq 6
+  --format '{{.ID}}' | wc -l)" -eq 3
+test "$(docker ps --filter label=com.docker.compose.project=emactiva-leadflow \
+  --filter health=healthy --format '{{.ID}}' | wc -l)" -eq 3
+test "$(docker ps --filter label=com.docker.compose.project=leadflow-web-gateway \
+  --format '{{.ID}}' | wc -l)" -eq 2
+test "$(docker ps --filter label=com.docker.compose.project=leadflow-web-bridge \
+  --format '{{.ID}}' | wc -l)" -eq 1
 printf 'lf015_cleanup post_check=PASS manifests=%s\n' "$STATE"
 ```
 
@@ -837,3 +843,65 @@ PASS requiere `slack_gate_http=200 delivered=True`, una alerta visual técnica s
 - **PASS SYSTEM:** `python -m unittest scripts.test.test_lf015_backup.RestorePreflightTests` = 13/13; compilación Python PASS. Incluye el modelo productivo reportado y confirma RC=2 sin FAIL, exclusivamente por `iam_gcs_runtime=NOT_VERIFIED`.
 - **NOT_VERIFIED ENVIRONMENT:** C4 no está aprobado hasta sincronizar esta corrección y repetir únicamente el preflight productivo en la VM. No se ejecutaron Docker, GCP, restore ni cambios de red.
 - **Siguiente paso:** transferir/verificar `scripts/backup/preflight_restore.py`, ejecutar una vez el mismo preflight productivo y detenerse si aparece cualquier FAIL; solo RC=2 limitado al gate IAM/GCS ya acreditable permite continuar con la restauración aislada autorizada.
+
+### C5.2 — Consolidación documental y gate técnico de LF015-T03 (#17)
+
+Estado de referencia: `main`/HEAD `930d50e`. Esta sección consolida la evidencia posterior a C4.1.3 y sustituye únicamente sus estados pendientes cuando existe evidencia posterior; las observaciones históricas se conservan para trazabilidad. No cierra el Issue mediante API, no autoriza tráfico comercial ni declara finalizado LAB-LF-015.
+
+#### Dictamen
+
+- **LF015-T03 / #17: PASS CON WARN para aceptación técnica del alcance evaluado.** No permanece un defecto SYSTEM crítico/alto demostrado que impida aceptar la implementación precomercial controlada. La publicación comercial desatendida y la autorización de exposición futura conservan gates ENVIRONMENT/HYBRID propios.
+- **Implementación técnica:** PASS dentro del alcance probado: ingreso HTTPS, Turnstile/CORS/rate limit, Bridge→Core, persistencia, HubSpot, idempotencia, backup/restore y autoridad DSR prospectiva.
+- **Aceptación operativa:** PASS CON WARN: operación controlada y recuperación aislada fueron demostradas; monitoreo/alerta automática, renovación TLS y recuperación por pérdida integral de infraestructura no están cerrados.
+- **Preparación comercial:** NOT_VERIFIED. No se acreditaron valores reales de enriquecimiento, notificación nativa HubSpot ni operación sostenida con datos/tráfico comercial.
+- **Autorización de exposición:** NO OTORGADA por este gate. Requiere decisión humana separada y cierre de los controles ambientales críticos/altos indicados abajo.
+
+#### Evidencia consolidada A — funcionalidad y seguridad
+
+- **PASS:** cuatro ejecuciones sintéticas funcionales `success`, contrato EVENT/LEAD/INTERACTION, creación/actualización en HubSpot dentro del alcance y duplicado exacto HTTP 202 sin efectos adicionales. El backend acreditado corresponde al commit `a8592ef`; la remediación Slack al commit `56da711`.
+- **PASS:** autenticación/autorización, HTTPS, CORS, Turnstile real, IAP/firewall/443, rechazos HTTP 400/413/429 e idempotencia. El escaneo aportado dio cero coincidencias sensibles en las cinco superficies revisadas; esto no prueba ausencia universal en historiales no inspeccionados.
+- **PASS:** entrega directa real Adapter→Slack después de A3.1. El FAIL `delivered=false` de A3.1 queda como evidencia histórica previa a la corrección. **NOT_VERIFIED:** disparo automático de Slack desde un fallo real del Core.
+- **NOT_VERIFIED:** valores reales producidos por enriquecimiento y viabilidad/entrega de notificación nativa HubSpot. No son PASS implícitos por el éxito del flujo principal.
+
+#### Evidencia consolidada B — cleanup autorizado
+
+- **PASS:** alerta sintetica `lf_exec_lf015_t03_alert_gate` eliminada mediante interfaz visual; canal preservado.
+
+- **PASS:** eliminación de siete contenedores QA, dos volúmenes y dos redes; los seis contenedores productivos fueron preservados. Estado final correcto: PostgreSQL, Adapters y n8n `healthy`; Web Bridge, Rate Gate y Caddy `running` sin healthcheck configurado, con cero reinicios inesperados.
+- **PASS:** tres objetos GCS de preflight eliminados; backups cifrados, sidecars y evidencia DSR preservados. Soft delete del proveedor no equivale a eliminación física inmediata.
+- **PASS con límite:** HubSpot quedó con cero contactos/tickets residuales por API para el conjunto autorizado. Tickets/contactos/empresas fueron archivados o eliminados desde la interfaz según capacidad; el archivado no acredita borrado físico. Empresas quedaron verificadas visualmente porque la API respondió 403 por scope insuficiente.
+- **PASS:** PostgreSQL autorizado terminó con cero ejecuciones y cero eventos; DSR, roles, migraciones y retención fueron preservados. El manifiesto de cleanup se conserva con SHA-256 `55321b0d...b7ce`; las herramientas corresponden al commit `3693087`.
+
+#### Evidencia consolidada C1–C3 — autoridad DSR y backup recuperable
+
+- **PASS prospectivo:** autoridad productiva independiente `emactiva-leadflow-pilot`, baseline `2026-11-15T20:34:46.374031Z`, cuatro conteos reconciliados en cero, contrato/hash `292d...b38`, snapshot inicial/hash `6dca...d33`, publicación create-only y verificación remota en `gs://emactiva-leadflow-pilot-dsr-evidence/production-authority/`.
+- **Límite:** la exclusión de operaciones DSR dependió del único operador y no de un lock automatizado. DELETE se conserva mientras exista riesgo de restore; RESTRICT hasta un levantamiento independiente y trazable. La evidencia histórica usa 30 días + 7 de eliminación no definitiva, mientras el snapshot vigente se conserva mientras sea necesario para bloquear restauraciones antiguas. La base jurídica y duración final siguen siendo decisión de privacidad, no una decisión SYSTEM.
+- **PASS:** backup limpio posterior al baseline: `gs://emactiva-leadflow-pilot-backups/leadflow-20261115T203907Z-41fb0681b1b5.tar.gcm`, con sidecar, creado `2026-11-15T20:39:07Z`, aproximadamente 3.7 MiB y escritura por `leadflow-backup` mediante impersonación desde `leadflow-runtime`.
+- **PASS:** checkpoint `2026-11-15T20:40:31.943635Z`, journal `3590...349`, export `e7fd...07f`, bundle v2 cifrado `b6be...36d7.dsr-bundle.gcm`, manifiesto de autoridad `26d2...b65` y manifiesto auténtico del backup `d53e...02e`; cero eventos y claves separadas. Una copia anterior a esta cadena no hereda cobertura prospectiva.
+
+#### Evidencia consolidada C4 — restore productivo aislado
+
+- La corrección SYSTEM de C4.1.3 corresponde al commit `930d50e`; pruebas focalizadas 13/13, compilación y diff check fueron PASS. El preflight real obtuvo 10 PASS, 0 FAIL y 1 NOT_VERIFIED limitado al gate IAM runtime; la identidad y lectura de cuatro objetos se acreditaron después, sin convertir otros controles en PASS.
+- **PASS:** restore aislado de PostgreSQL+n8n, integridad de transferencia/cifrado/archivo, 24 migraciones, 11 tablas, n8n con diez archivos/un workflow/SQLite íntegro, replay DSR vacío, estado durable `complete/PASS` y `traffic=DISABLED`. No se ejecutó flujo comercial en el destino.
+- **Tiempos no equivalentes:** `restore.sh` tardó 19 s; la ventana de mantenimiento completa fue 1040 s (17 min 20 s); ninguno demuestra por sí solo el RTO de desastre ante pérdida integral de infraestructura. La edad del backup fue 5700 s (1 h 35 min), compatible con RPO objetivo de 24 h en esa observación puntual, no con cumplimiento continuo.
+- **PASS:** cleanup exclusivo del restore (dos contenedores, dos volúmenes y una red), eliminación de `dsr.key`/`restore.env`, preservación de evidencia durable, identidades/scopes/restart policies restaurados y permiso IAM temporal revocado/verificado. La identidad productiva quedó preservada.
+- El restore QA anterior sigue siendo evidencia QA histórica; no debe presentarse como este restore productivo. El procedimiento antiguo que seleccionaba el backup del 14/11 queda **SUPERADO/NO APLICABLE** para este gate: la evidencia vigente usa el backup prospectivo del 15/11 ligado a la autoridad DSR.
+
+- **PASS:** post-check HTTPS posterior a la restitucion productiva: GET `/lead` devolvio HTTP 405 localmente y desde el origen externo autorizado. No se genero un nuevo lead.
+
+#### Evidencia consolidada C5.1 — custodia criptográfica
+
+- **PASS:** secreto independiente `dsr-evidence-production-key`, versión 1 habilitada, clave AES de 32 bytes, custodia administrativa en Bitwarden y coincidencia de digest verificada sin registrar valor ni fingerprint.
+- **WARN:** una salida Base64 inicial por stdout fue un procedimiento incorrecto y se sustituyó por archivo binario protegido. No se puede afirmar ausencia absoluta en historiales, clipboard o cachés; esa exposición controlada permanece como límite y exige disciplina/rotación según política.
+
+#### Riesgos y gates posteriores
+
+- **Bloquean exposición comercial desatendida (ENVIRONMENT/HYBRID):** validar renovación automática del certificado short-lived y compatibilidad continua del firewall con TLS-ALPN; establecer recuperación independiente ante pérdida integral de VM/infraestructura y medir RTO extremo a extremo; aprobar explícitamente la exposición pública y la operación con datos comerciales.
+- **WARN / seguimiento operativo:** allow interno de red, rate limiting en memoria ante reinicio/NAT, alerta automática Slack desde fallo del Core, notificación nativa HubSpot, valores reales de enriquecimiento, verificación API de empresas HubSpot, archivado frente a eliminación física, enforcement externo RESTRICT, replay productivo no vacío posterior a un backup y comparación completa de contenido restaurado.
+- **Gobernanza:** la exclusión administrativa DSR sigue dependiendo del operador; rotación/tokenización conserva riesgos previos documentados. RPO/RTO continuos y emisión/renovación TLS pública permanecen NOT_VERIFIED fuera de la evidencia puntual.
+
+#### Continuidad controlada
+
+- **Gate recomendado para #17:** aceptar técnicamente como `PASS CON WARN`, registrar los riesgos anteriores y solicitar decisión humana de cierre; no ejecutar cierre automático ni interpretar la aceptación como autorización comercial.
+- **#18 / LF015-T04:** entrega operativa, monitoreo/alertas, runbooks de operación, ownership, capacitación, aceptación y autorización de exposición. No ejecutado en esta consolidación.
+- **LAB-LF-015 permanece ABIERTO.** La continuidad estratégica al finalizar el LAB es Event Normalization → LF005; no se inicia aquí.
