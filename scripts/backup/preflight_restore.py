@@ -43,7 +43,9 @@ def load_compose(root,project,override):
  return json.loads(result.stdout)
 def authority_manifest(path):
  value=json.loads(Path(path).read_text(encoding="utf-8"))
- if set(value)!=AUTHORITY_KEYS or value.get("version")!="LF015-DSR-AUTHORITY-1" or not TECH.fullmatch(str(value.get("authority_export_id",""))) or not isinstance(value.get("complete_through_sequence"),int) or value["complete_through_sequence"]<0 or not isinstance(value.get("event_count"),int) or value["event_count"]<0 or not isinstance(value.get("evidence_ids"),list) or value["event_count"]!=len(value["evidence_ids"]) or len(set(value["evidence_ids"]))!=len(value["evidence_ids"]) or not all(HEX64.fullmatch(str(item)) for item in value["evidence_ids"]) or not HEX64.fullmatch(str(value.get("evidence_ids_sha256",""))): raise ValueError("invalid authority manifest")
+ production=value.get("version")=="LF015-DSR-AUTHORITY-2"; expected=AUTHORITY_KEYS|({"scope","source_system_id","baseline_attestation_sha256"} if production else set())
+ if set(value)!=expected or value.get("version") not in {"LF015-DSR-AUTHORITY-1","LF015-DSR-AUTHORITY-2"} or not TECH.fullmatch(str(value.get("authority_export_id",""))) or not isinstance(value.get("complete_through_sequence"),int) or value["complete_through_sequence"]<0 or not isinstance(value.get("event_count"),int) or value["event_count"]<0 or not isinstance(value.get("evidence_ids"),list) or value["event_count"]!=len(value["evidence_ids"]) or len(set(value["evidence_ids"]))!=len(value["evidence_ids"]) or not all(HEX64.fullmatch(str(item)) for item in value["evidence_ids"]) or not HEX64.fullmatch(str(value.get("evidence_ids_sha256",""))): raise ValueError("invalid authority manifest")
+ if production and (value["scope"]!="production_prospective" or not TECH.fullmatch(str(value["source_system_id"])) or not HEX64.fullmatch(str(value["baseline_attestation_sha256"]))): raise ValueError("invalid production authority manifest")
  started=datetime.fromisoformat(str(value.get("coverage_started_at_utc","")).replace("Z","+00:00")); covered=datetime.fromisoformat(str(value.get("covered_through_utc","")).replace("Z","+00:00"))
  if started.tzinfo is None or covered.tzinfo is None or covered<started: raise ValueError("invalid authority manifest")
  digest=hashlib.sha256((json.dumps(value["evidence_ids"],sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
@@ -84,8 +86,12 @@ def main():
   record("authority_structure","PASS")
  except Exception: record("authority_structure","FAIL")
  mode=os.environ.get("LF015_DSR_AUTHORITY_MODE","")
- if mode=="synthetic_closed_set" and not any(status=="FAIL" for _,status in results): record("authority_scope","WARN")
- else: record("authority_scope","NOT_VERIFIED")
+ try:
+  actual=authority_manifest(manifest).get("scope","synthetic_qa_closed_set")
+  expected={"synthetic_closed_set":"synthetic_qa_closed_set","production_prospective":"production_prospective"}.get(mode)
+  if not expected or actual!=expected: raise ValueError("authority scope mismatch")
+  record("authority_scope","PASS" if actual=="production_prospective" else "WARN")
+ except Exception: record("authority_scope","FAIL")
  record("iam_gcs_runtime","NOT_VERIFIED")
  if any(status=="FAIL" for _,status in results): return 1
  if any(status=="NOT_VERIFIED" for _,status in results): return 2

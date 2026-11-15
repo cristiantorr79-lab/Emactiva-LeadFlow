@@ -78,7 +78,8 @@ node "$ROOT/scripts/backup/backup_crypto.mjs" decrypt --key-file "$BACKUP_KEY_FI
 python3 "$ROOT/scripts/backup/validate_restore_archive.py" extract "$TMP/payload.tar" "$TMP/payload" "$RESTORE_MAX_ENTRIES" "$RESTORE_MAX_EXTRACTED_BYTES" "$RESTORE_MAX_MEMBER_BYTES" || die archive
 [[ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["backup_id"])' "$TMP/payload/manifest.json")" == "${RESTORE_GCS_URI##*/}" ]] || die archive_identity
 "${COMPOSE[@]}" exec -T postgres pg_restore --list <"$TMP/payload/postgres.dump" >/dev/null || die postgres_dump
-DSR_BUNDLE_RESULT="$(python3 "$ROOT/scripts/backup/dsr_restore_evidence.py" validate-bundle --key-file "$DSR_EVIDENCE_KEY_FILE" --input "$EVIDENCE_ARTIFACT" --output "$TMP/dsr-bundle.json" --backup-manifest "$TMP/payload/manifest.json")" || die dsr_evidence
+case "${LF015_DSR_AUTHORITY_MODE:-synthetic_closed_set}" in synthetic_closed_set) DSR_EXPECTED_SCOPE=synthetic_qa_closed_set;; production_prospective) DSR_EXPECTED_SCOPE=production_prospective;; *) die dsr_authority_scope;; esac
+DSR_BUNDLE_RESULT="$(python3 "$ROOT/scripts/backup/dsr_restore_evidence.py" validate-bundle --key-file "$DSR_EVIDENCE_KEY_FILE" --input "$EVIDENCE_ARTIFACT" --output "$TMP/dsr-bundle.json" --backup-manifest "$TMP/payload/manifest.json" --expected-authority-scope "$DSR_EXPECTED_SCOPE")" || die dsr_evidence
 DSR_EVENT_COUNT="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["event_count"])' "$DSR_BUNDLE_RESULT")"; [[ "$DSR_EVENT_COUNT" =~ ^[0-9]+$ ]] || die dsr_evidence
 python3 "$ROOT/scripts/backup/dsr_restore_evidence.py" emit-sql --input "$TMP/dsr-bundle.json" --output "$TMP/dsr-replay.sql" >/dev/null || die dsr_evidence
 log decrypt_validate PASS

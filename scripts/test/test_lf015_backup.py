@@ -122,6 +122,8 @@ class DsrQaAuthorityTests(unittest.TestCase):
  def event(self,sequence,fill,disposition): return {"sequence":sequence,"evidence_id":fill*64,"disposition":disposition,"effective_at_utc":f"2025-11-10T11:0{sequence}:00Z","publication_state":"confirmed"}
  def backup(self,path,created="20251110T103000Z"):
   path.write_text(json.dumps({"created_utc":created}),encoding="utf-8"); return path
+ def baseline(self,source="leadflow-production-admin",observed="2025-11-10T10:00:00Z",**changes):
+  value={"version":"LF015-DSR-PRODUCTION-BASELINE-1","environment":"production","source_system_id":source,"observed_at_utc":observed,"dsr_request_count":0,"tombstone_count":0,"outbox_pending_count":0,"provider_action_pending_count":0}; value.update(changes); return value
  def test_zero_events_has_demonstrable_closed_sequence(self):
   dsr,_,_=self.modules()
   with tempfile.TemporaryDirectory() as temporary:
@@ -169,6 +171,40 @@ class DsrQaAuthorityTests(unittest.TestCase):
    with self.assertRaises(ValueError): dsr.authority_from_export(export,self.backup(root/"old-backup.json","20251110T090000Z"))
    broken=json.loads(initial.read_text()); broken["snapshot_sequence"]=1; broken["previous_snapshot_sha256"]="0"*64; broken["latest_event_sequence"]=1; initial2=root/"broken.json"; initial2.write_text(json.dumps(broken))
    with self.assertRaises(ValueError): journal.load(initial2)
+ def test_production_empty_baseline_is_prospective_and_bound_to_source(self):
+  dsr,preflight,journal=self.modules()
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary); baseline=root/"baseline.json"; baseline.write_text(json.dumps(self.baseline()),encoding="utf-8")
+   initial=root/"journal-000.json"; journal.initialize(initial,"leadflow-production-admin","2025-11-10T10:00:00Z",journal.PRODUCTION_SCOPE,baseline)
+   checkpoint=root/"journal-001.json"; journal.checkpoint(initial,"2025-11-10T12:00:00Z",0,checkpoint)
+   export=root/"export.json"; journal.export(checkpoint,export,"lf015-production-export-1")
+   manifest=root/"authority.json"; value=dsr.write_authority_manifest(export,manifest,self.backup(root/"backup.json"))
+   self.assertEqual((value["version"],value["scope"],value["event_count"]),("LF015-DSR-AUTHORITY-2","production_prospective",0)); self.assertEqual(preflight.authority_manifest(manifest),value)
+   self.assertEqual(dsr.write_authority_manifest(export,manifest,root/"backup.json"),value)
+   with self.assertRaises(ValueError): dsr.authority_from_export(export,self.backup(root/"old.json","20251110T095959Z"))
+ def test_production_continuity_and_qa_scope_separation(self):
+  dsr,_,journal=self.modules()
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary); spool=root/"spool"; spool.mkdir(); spool.chmod(0o700); key=root/"key"; key.write_bytes(b"p"*32); key.chmod(0o600)
+   baseline=root/"baseline.json"; baseline.write_text(json.dumps(self.baseline()),encoding="utf-8"); current=root/"journal-000.json"; journal.initialize(current,"leadflow-production-admin","2025-11-10T10:00:00Z",journal.PRODUCTION_SCOPE,baseline)
+   for index,(fill,disposition) in enumerate((("a","deleted"),("b","restricted")),1):
+    _,artifact=dsr.stage({"subject_token":fill*64,"disposition":disposition,"effective_at_utc":f"2025-11-10T11:0{index}:00Z"},key,spool); following=root/f"journal-00{index}.json"; journal.record(current,artifact,key,following); current=following
+   checkpoint=root/"journal-003.json"; journal.checkpoint(current,"2025-11-10T12:00:00Z",0,checkpoint); export=root/"export.json"; journal.export(checkpoint,export,"lf015-production-export-2")
+   authority=dsr.authority_from_export(export,self.backup(root/"backup.json")); self.assertEqual((authority["complete_through_sequence"],authority["event_count"]),(2,2)); self.assertEqual(authority["scope"],"production_prospective")
+   with self.assertRaises(ValueError): journal.record(current,artifact,key,root/"duplicate.json")
+   qa=root/"qa.json"; qa.write_text(json.dumps(self.export()),encoding="utf-8"); qa_authority=dsr.authority_from_export(qa); self.assertNotIn("scope",qa_authority)
+   qa_manifest=root/"qa-authority.json"; qa_manifest.write_bytes(dsr.canonical(qa_authority)); qa_spool=root/"qa-spool"; qa_spool.mkdir(); qa_spool.chmod(0o700); qa_output=root/"qa-output"; qa_output.mkdir(); qa_output.chmod(0o700)
+   _,qa_bundle,_=dsr.bundle(qa_spool,key,qa_output,qa_manifest)
+   with self.assertRaises(ValueError): dsr.validate_bundle(qa_bundle,key,root/"qa-bundle.json",None,"production_prospective")
+ def test_production_rejects_unreconciled_altered_or_pending_inputs(self):
+  dsr,_,journal=self.modules()
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary)
+   for index,changes in enumerate(({"outbox_pending_count":1},{"tombstone_count":1},{"environment":"qa"})):
+    baseline=root/f"bad-{index}.json"; baseline.write_text(json.dumps(self.baseline(**changes)),encoding="utf-8")
+    with self.assertRaises(ValueError): journal.initialize(root/f"journal-{index}.json","leadflow-production-admin","2025-11-10T10:00:00Z",journal.PRODUCTION_SCOPE,baseline)
+   value={"version":"LF015-DSR-ADMIN-EXPORT-2","scope":"production_prospective","source_system_id":"leadflow-production-admin","authority_export_id":"lf015-production-bad","coverage_started_at_utc":"2025-11-10T10:00:00Z","covered_through_utc":"2025-11-10T12:00:00Z","complete_through_sequence":1,"events":[{**self.event(1,"a","deleted"),"publication_state":"pending"}],"baseline_attestation":self.baseline()}; path=root/"bad-export.json"; path.write_text(json.dumps(value),encoding="utf-8")
+   with self.assertRaises(ValueError): dsr.authority_from_export(path)
 
 class QaRestoreProbeTests(unittest.TestCase):
  def setUp(self):

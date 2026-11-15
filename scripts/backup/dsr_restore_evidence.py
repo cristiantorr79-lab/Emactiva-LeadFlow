@@ -25,18 +25,29 @@ def validate_event(value):
  if hashlib.sha256(canonical(base)).hexdigest()!=value["evidence_id"]: raise ValueError("invalid event digest")
  return value
 def validate_authority(value,events):
- expected={"version","authority_export_id","coverage_started_at_utc","covered_through_utc","complete_through_sequence","event_count","evidence_ids","evidence_ids_sha256"}
- if set(value)!=expected or value["version"]!="LF015-DSR-AUTHORITY-1" or not TECH.fullmatch(str(value["authority_export_id"])) or not isinstance(value["complete_through_sequence"],int) or value["complete_through_sequence"]<0 or not isinstance(value["event_count"],int) or not isinstance(value["evidence_ids"],list): raise ValueError("invalid authority manifest")
+ common={"version","authority_export_id","coverage_started_at_utc","covered_through_utc","complete_through_sequence","event_count","evidence_ids","evidence_ids_sha256"}
+ production=value.get("version")=="LF015-DSR-AUTHORITY-2"
+ expected=common|({"scope","source_system_id","baseline_attestation_sha256"} if production else set())
+ if set(value)!=expected or value.get("version") not in {"LF015-DSR-AUTHORITY-1","LF015-DSR-AUTHORITY-2"} or not TECH.fullmatch(str(value.get("authority_export_id"))) or not isinstance(value.get("complete_through_sequence"),int) or value["complete_through_sequence"]<0 or not isinstance(value.get("event_count"),int) or not isinstance(value.get("evidence_ids"),list): raise ValueError("invalid authority manifest")
+ if production and (value["scope"]!="production_prospective" or not TECH.fullmatch(str(value["source_system_id"])) or not HEX64.fullmatch(str(value["baseline_attestation_sha256"]))): raise ValueError("invalid production authority")
  started=timestamp(value["coverage_started_at_utc"]); covered=timestamp(value["covered_through_utc"])
  if covered<started: raise ValueError("invalid authority coverage")
  ids=[event["evidence_id"] for event in events]
  if value["event_count"]!=len(ids) or value["evidence_ids"]!=ids or len(set(ids))!=len(ids) or not HEX64.fullmatch(str(value["evidence_ids_sha256"])) or hashlib.sha256(canonical(ids)).hexdigest()!=value["evidence_ids_sha256"]: raise ValueError("authority coverage mismatch")
  return value
 def authority_from_export(path: Path,backup_manifest: Path|None=None):
- value=json.loads(Path(path).read_text(encoding="utf-8")); expected={"version","scope","source_system_id","authority_export_id","coverage_started_at_utc","covered_through_utc","complete_through_sequence","events"}
- if set(value)!=expected or value["version"]!="LF015-DSR-ADMIN-EXPORT-1" or value["scope"]!="synthetic_qa_closed_set" or not TECH.fullmatch(str(value["source_system_id"])) or not TECH.fullmatch(str(value["authority_export_id"])) or not isinstance(value["complete_through_sequence"],int) or value["complete_through_sequence"]<0 or not isinstance(value["events"],list): raise ValueError("invalid administrative export")
+ value=json.loads(Path(path).read_text(encoding="utf-8")); common={"version","scope","source_system_id","authority_export_id","coverage_started_at_utc","covered_through_utc","complete_through_sequence","events"}
+ production=value.get("scope")=="production_prospective"; expected=common|({"baseline_attestation"} if production else set())
+ if set(value)!=expected or (value.get("version"),value.get("scope")) not in {("LF015-DSR-ADMIN-EXPORT-1","synthetic_qa_closed_set"),("LF015-DSR-ADMIN-EXPORT-2","production_prospective")} or not TECH.fullmatch(str(value.get("source_system_id"))) or not TECH.fullmatch(str(value.get("authority_export_id"))) or not isinstance(value.get("complete_through_sequence"),int) or value["complete_through_sequence"]<0 or not isinstance(value.get("events"),list): raise ValueError("invalid administrative export")
  started=timestamp(value["coverage_started_at_utc"]); covered=timestamp(value["covered_through_utc"])
  if covered<started: raise ValueError("invalid administrative coverage")
+ baseline_digest=None
+ if production:
+  baseline=value["baseline_attestation"]; keys={"version","environment","source_system_id","observed_at_utc","dsr_request_count","tombstone_count","outbox_pending_count","provider_action_pending_count"}
+  if set(baseline)!=keys or baseline.get("version")!="LF015-DSR-PRODUCTION-BASELINE-1" or baseline.get("environment")!="production" or baseline.get("source_system_id")!=value["source_system_id"] or baseline.get("observed_at_utc")!=value["coverage_started_at_utc"]: raise ValueError("invalid production baseline attestation")
+  counts=[baseline.get(name) for name in ("dsr_request_count","tombstone_count","outbox_pending_count","provider_action_pending_count")]
+  if any(not isinstance(count,int) or isinstance(count,bool) or count!=0 for count in counts): raise ValueError("production baseline is not empty and reconciled")
+  baseline_digest=hashlib.sha256(canonical(baseline)).hexdigest()
  if backup_manifest:
   backup=json.loads(Path(backup_manifest).read_text(encoding="utf-8")); created=datetime.strptime(backup["created_utc"],"%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
   if created<started or created>covered: raise ValueError("backup outside administrative coverage")
@@ -47,7 +58,9 @@ def authority_from_export(path: Path,backup_manifest: Path|None=None):
   if effective>covered: raise ValueError("administrative coverage excludes evidence")
   ids.append(event["evidence_id"]); ordering.append((event["effective_at_utc"],event["evidence_id"]))
  if value["complete_through_sequence"]!=len(value["events"]) or len(set(ids))!=len(ids) or ordering!=sorted(ordering): raise ValueError("incomplete administrative export")
- return {"version":"LF015-DSR-AUTHORITY-1","authority_export_id":value["authority_export_id"],"coverage_started_at_utc":value["coverage_started_at_utc"],"covered_through_utc":value["covered_through_utc"],"complete_through_sequence":value["complete_through_sequence"],"event_count":len(ids),"evidence_ids":ids,"evidence_ids_sha256":hashlib.sha256(canonical(ids)).hexdigest()}
+ result={"version":"LF015-DSR-AUTHORITY-1","authority_export_id":value["authority_export_id"],"coverage_started_at_utc":value["coverage_started_at_utc"],"covered_through_utc":value["covered_through_utc"],"complete_through_sequence":value["complete_through_sequence"],"event_count":len(ids),"evidence_ids":ids,"evidence_ids_sha256":hashlib.sha256(canonical(ids)).hexdigest()}
+ if production: result.update(version="LF015-DSR-AUTHORITY-2",scope=value["scope"],source_system_id=value["source_system_id"],baseline_attestation_sha256=baseline_digest)
+ return result
 def write_authority_manifest(export_path: Path,output: Path,backup_manifest: Path):
  encoded=canonical(authority_from_export(export_path,backup_manifest))
  if output.exists():
@@ -107,7 +120,7 @@ def bundle(spool,key,output_dir,authority_manifest):
   with sidecar.open("x",encoding="ascii") as stream: stream.write(checksum)
   sidecar.chmod(0o600)
  return len(events),output,bundle_id
-def validate_bundle(path,key,output,backup_manifest=None):
+def validate_bundle(path,key,output,backup_manifest=None,expected_scope=None):
  run_crypto("decrypt",key,path,output); value=json.loads(output.read_text(encoding="utf-8"))
  if set(value)!={"version","authority","event_count","events_sha256","events"} or value["version"]!="LF015-DSR-BUNDLE-2" or not isinstance(value["events"],list) or not isinstance(value["event_count"],int) or value["event_count"]!=len(value["events"]) or not HEX64.fullmatch(value["events_sha256"]) or hashlib.sha256(canonical(value["events"])).hexdigest()!=value["events_sha256"]: raise ValueError("invalid bundle")
  ids=set()
@@ -117,6 +130,8 @@ def validate_bundle(path,key,output,backup_manifest=None):
   ids.add(event["evidence_id"])
  if value["events"]!=sorted(value["events"],key=lambda e:(e["effective_at_utc"],e["evidence_id"])): raise ValueError("invalid bundle ordering")
  authority=validate_authority(value["authority"],value["events"]); covered=timestamp(authority["covered_through_utc"])
+ actual_scope=authority.get("scope","synthetic_qa_closed_set")
+ if expected_scope and expected_scope!=actual_scope: raise ValueError("authority scope mismatch")
  if any(timestamp(event["effective_at_utc"])>covered for event in value["events"]): raise ValueError("authority coverage excludes evidence")
  if backup_manifest:
   backup=json.loads(backup_manifest.read_text(encoding="utf-8")); created=datetime.strptime(backup["created_utc"],"%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
@@ -147,7 +162,7 @@ def main():
  parser=argparse.ArgumentParser(); sub=parser.add_subparsers(dest="command",required=True)
  p=sub.add_parser("stage"); p.add_argument("--key-file",required=True,type=Path); p.add_argument("--spool-dir",required=True)
  p=sub.add_parser("bundle"); p.add_argument("--key-file",required=True,type=Path); p.add_argument("--events-dir",required=True); p.add_argument("--output-dir",required=True); p.add_argument("--authority-manifest",required=True,type=Path)
- p=sub.add_parser("validate-bundle"); p.add_argument("--key-file",required=True,type=Path); p.add_argument("--input",required=True,type=Path); p.add_argument("--output",required=True,type=Path); p.add_argument("--backup-manifest",type=Path)
+ p=sub.add_parser("validate-bundle"); p.add_argument("--key-file",required=True,type=Path); p.add_argument("--input",required=True,type=Path); p.add_argument("--output",required=True,type=Path); p.add_argument("--backup-manifest",type=Path); p.add_argument("--expected-authority-scope",choices=("synthetic_qa_closed_set","production_prospective"))
  p=sub.add_parser("emit-sql"); p.add_argument("--input",required=True,type=Path); p.add_argument("--output",required=True,type=Path)
  p=sub.add_parser("authority-manifest"); p.add_argument("--admin-export",required=True,type=Path); p.add_argument("--backup-manifest",required=True,type=Path); p.add_argument("--output",required=True,type=Path)
  p=sub.add_parser("publish"); p.add_argument("--artifact",required=True,type=Path); p.add_argument("--gcs-prefix",required=True); p.add_argument("--writer-identity",required=True)
@@ -157,7 +172,8 @@ def main():
    event,path=stage(json.load(sys.stdin),args.key_file,secure_dir(args.spool_dir)); print(json.dumps({"status":"pending_confirmation","evidence_id":event["evidence_id"],"artifact":str(path)},separators=(",",":")))
   elif args.command=="bundle":
    count,path,bundle_id=bundle(secure_dir(args.events_dir),args.key_file,secure_dir(args.output_dir),args.authority_manifest); print(json.dumps({"status":"created","event_count":count,"bundle_id":bundle_id,"artifact":str(path)},separators=(",",":")))
-  elif args.command=="validate-bundle": print(json.dumps({"status":"valid","event_count":len(validate_bundle(args.input,args.key_file,args.output,args.backup_manifest)["events"])},separators=(",",":")))
+  elif args.command=="validate-bundle":
+   value=validate_bundle(args.input,args.key_file,args.output,args.backup_manifest,args.expected_authority_scope); print(json.dumps({"status":"valid","event_count":len(value["events"]),"authority_scope":value["authority"].get("scope","synthetic_qa_closed_set")},separators=(",",":")))
   elif args.command=="emit-sql": emit_sql(args.input,args.output); print(json.dumps({"status":"created"},separators=(",",":")))
   elif args.command=="authority-manifest": value=write_authority_manifest(args.admin_export,args.output,args.backup_manifest); print(json.dumps({"status":"created","event_count":value["event_count"]},separators=(",",":")))
   else: print(json.dumps({"status":"pending_confirmation","object":publish(args.artifact,args.gcs_prefix,args.writer_identity)},separators=(",",":")))

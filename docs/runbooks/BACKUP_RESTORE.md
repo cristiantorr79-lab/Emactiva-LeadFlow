@@ -102,6 +102,27 @@ Antes del checkpoint, el administrador reconcilia con la fuente operativa que el
 
 Este control SYSTEM demuestra que bundle y manifiesto coinciden; una fecha, hash, secuencia o URI aportados manualmente no demuestran actualidad global. La producción íntegra del manifiesto desde una autoridad administrativa independiente y su custodia son HYBRID/ENVIRONMENT y permanecen `NOT_VERIFIED`. Sin ese manifiesto el bundle no se crea y restore falla cerrado.
 
+### Inicio prospectivo de autoridad DSR productiva
+
+Producción usa un alcance distinto, `production_prospective`, y contratos `LF015-DSR-PRODUCTION-JOURNAL-1`, `LF015-DSR-ADMIN-EXPORT-2` y `LF015-DSR-AUTHORITY-2`. El manifiesto conserva alcance, identificador de la fuente y digest del acta inicial; por ello un bundle QA no puede satisfacer un restore configurado con `LF015_DSR_AUTHORITY_MODE=production_prospective`. Los contratos QA v1 siguen siendo compatibles únicamente con `synthetic_closed_set`.
+
+El inicio es prospectivo y solo procede después del cleanup autorizado. En una misma ventana administrativa: bloquear nuevas operaciones DSR; consultar la fuente operacional y comprobar cero solicitudes, tombstones, outbox pendiente y acciones de proveedor pendientes; comprobar que no exista una cadena productiva previa; registrar esos cuatro conteos, el identificador técnico de la fuente y el instante UTC en un acta `LF015-DSR-PRODUCTION-BASELINE-1`; y custodiar el acta y el snapshot cero en el bucket DSR independiente con create-only/no-clobber. El script valida estructura, valores cero y enlace exacto de fuente/instante, pero no autentica por sí solo el origen de los conteos: identidad efectiva, consulta, exclusión mutua y publicación permanecen gate ENVIRONMENT.
+
+```bash
+python3 scripts/backup/dsr_qa_authority.py init \
+  --scope production_prospective \
+  --source-system-id "$PRODUCTION_DSR_SOURCE_ID" \
+  --coverage-started-at "$BASELINE_OBSERVED_AT" \
+  --baseline-attestation "$WORK_DIR/production-baseline.json" \
+  --output "$WORK_DIR/journal-000000.json"
+```
+
+Solo después de publicar y verificar ese snapshot se reabren operaciones DSR y se crea un backup nuevo; ningún backup anterior obtiene cobertura retroactiva. Cada DELETE/RESTRICT posterior sigue `stage`/publicación confirmada/`record`; antes de `checkpoint`, el administrador reconcilia secuencia, objetos y todos los pendientes en cero. Luego genera exportación, manifiesto y bundle con los comandos existentes. El preflight debe usar `LF015_DSR_AUTHORITY_MODE=production_prospective`; restore vuelve a exigir ese alcance al autenticar el bundle. Ausencia, alteración, hueco, pendiente, fuente distinta o backup fuera de `[coverage_started_at_utc, covered_through_utc]` bloquea el tráfico.
+
+Secuencia operativa posterior: (1) acta y snapshot cero inmutables; (2) backup productivo nuevo y checksum; (3) checkpoint posterior que cubra el instante del backup; (4) exportación v2, manifiesto v2 y bundle cifrado; (5) preflight aislado; (6) restore PostgreSQL+n8n; (7) replay y enforcement DSR; (8) tráfico aún deshabilitado hasta PASS; (9) cleanup exclusivo del destino. No reutilizar el bundle QA del 10/11 ni atribuir cobertura al backup del 14/11 si precede al baseline.
+
+Decisiones de Privacidad pendientes: vigencia de DELETE/RESTRICT, quién y con qué evidencia puede levantar una restricción, retención del journal/snapshot vigente y tratamiento tras expirar la última copia recuperable. Hasta resolverlas, el mecanismo no elimina eventos vigentes ni autoriza levantamientos; esto es fail-closed, no aprobación de retención indefinida.
+
 Restore recibe por URI explícita el bundle administrativo más reciente, sin depender de listado. La cuenta de restore es distinta del escritor y del administrador. La clave DSR debe ser distinta de `BACKUP_KEY_FILE`. El bundle nunca se incluye como única fuente dentro del propio backup.
 
 Además de `LEADFLOW_RESTORE_ISOLATED=true`, `RESTORE_GCS_URI`, `DSR_EVIDENCE_URI`, identidades, ambas claves y variables PostgreSQL, se requieren:
