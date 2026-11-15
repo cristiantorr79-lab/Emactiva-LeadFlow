@@ -52,6 +52,14 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def respond_text(self, status, value):
+        raw = value.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def read_json(self):
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -316,14 +324,17 @@ class Handler(BaseHTTPRequestHandler):
         self.respond(200, {"enrichment_status": "success", "data": data})
 
     def slack_alert(self, payload):
-        allowed = {"execution_id", "stage", "error_code"}
-        if set(payload) != allowed or not all(isinstance(payload[name], str) and payload[name] for name in allowed):
+        if set(payload) != {"text"} or not isinstance(payload.get("text"), str):
             self.respond(400, {"error": {"type": "validation_error"}})
             return
-        minimal = {name: payload[name] for name in ("execution_id", "stage", "error_code")}
+        match = re.fullmatch(r"LeadFlow alert \| execution_id=([A-Za-z0-9._:-]+) \| stage=([a-z][a-z0-9_-]*) \| error_code=([a-z][a-z0-9_-]*)", payload["text"])
+        if not match:
+            self.respond(400, {"error": {"type": "validation_error"}})
+            return
+        minimal = dict(zip(("execution_id", "stage", "error_code"), match.groups()))
         with lock:
             alerts.append(minimal)
-        self.respond(200, {"ok": True})
+        self.respond_text(200, "ok")
 
 
 ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

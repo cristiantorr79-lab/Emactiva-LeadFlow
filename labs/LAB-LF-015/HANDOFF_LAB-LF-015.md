@@ -560,3 +560,203 @@ LAB-LF-015 remains OPEN.
 
 Next: authorized Git commit/push, selective deployment,
 controlled production validation and safe recovery.
+
+### LF015-T03 — Gates finales y cleanup preparado (2026-11-15)
+
+Estado reportado por el operador, no repetido en esta ejecución: backend `a8592ef`, frontend `da01514`, HTTPS/Turnstile/CORS e integración Lovable→PostgreSQL/HubSpot PASS; cuatro éxitos, un duplicado, dos contactos, cuatro tickets y cero contextos. La causa específica del 502 original continúa NOT_VERIFIED y no se reabre sin evidencia nueva. Esta ejecución solo consolidó procedimientos; no operó GCP, Docker, proveedores ni datos.
+
+#### Bloque A1 — aislamiento y autorización (Google Cloud Shell + SSH VM, solo lectura/rechazos)
+
+Justificación: falta acreditar que solo 443 está expuesto y que Bridge/n8n rechazan llamadas sin identidad, sin repetir el happy path.
+
+```bash
+# Google Cloud Shell: inventario read-only; no mostrar variables ni secretos.
+PROJECT=emactiva-leadflow-pilot
+ZONE=us-central1-a
+VM=leadflow-pilot-01
+gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" \
+  --format='yaml(status,networkInterfaces[].accessConfigs[].natIP,serviceAccounts[].email)'
+gcloud compute firewall-rules list --project "$PROJECT" --filter='direction=INGRESS' \
+  --format='table(name,sourceRanges.list():label=SOURCE,allowed[].map().firewall_rule().list():label=ALLOW,targetTags.list():label=TAGS,targetServiceAccounts.list():label=SERVICE_ACCOUNTS,disabled)'
+```
+
+```bash
+# SSH VM: cargar configuración externa protegida; los preflight no hacen start.
+cd "$LEADFLOW_ROOT"
+python3 scripts/admin/web_gateway_with_secrets.py preflight --map "$WEB_GATEWAY_SECRET_MAP"
+python3 scripts/admin/web_bridge_with_secrets.py preflight --map "$WEB_BRIDGE_SECRET_MAP"
+python3 scripts/test/validate_web_bridge_gcp.py
+
+# Debe listar publicación únicamente para Caddy:443; no imprimir inspect/env completo.
+docker ps --format '{{.Names}}|{{.Ports}}|{{.Label "com.docker.compose.project"}}|{{.Label "com.docker.compose.service"}}'
+
+# Rechazos internos controlados, sin token ni PII; imprimir solo HTTP status.
+RATE_ID="$(docker ps -q --filter label=com.docker.compose.service=rate-gate)"
+ADAPTER_ID="$(docker ps -q --filter label=com.docker.compose.service=adapters --filter label=com.docker.compose.project=emactiva-leadflow)"
+test -n "$RATE_ID" -a -n "$ADAPTER_ID"
+docker exec -i "$RATE_ID" python - <<'PY'
+import json,urllib.request
+from urllib.error import HTTPError
+r=urllib.request.Request('http://web-bridge:8080/lead',data=b'{}',method='POST',headers={'Content-Type':'application/json','Origin':'https://emactivaspa.lovable.app'})
+try: urllib.request.urlopen(r,timeout=5); print('bridge_missing_identity=UNEXPECTED')
+except HTTPError as e: print('bridge_missing_identity_http='+str(e.code))
+PY
+docker exec -i "$ADAPTER_ID" python - <<'PY'
+import urllib.request
+from urllib.error import HTTPError
+r=urllib.request.Request('http://127.0.0.1:5678/webhook/leadflow',data=b'{}',method='POST',headers={'Content-Type':'application/json'})
+try: urllib.request.urlopen(r,timeout=5); print('n8n_missing_identity=UNEXPECTED')
+except HTTPError as e: print('n8n_missing_identity_http='+str(e.code))
+PY
+```
+
+PASS exige preflight PASS, solo Caddy publicado en 443 y ambos rechazos 4xx. Cualquier 2xx, puerto interno publicado o proyecto inesperado es FAIL y detiene el bloque.
+
+#### Bloque A2 — entradas, tamaño y rate limit reales (PowerShell Windows)
+
+Justificación: estos controles dependen del Gateway desplegado; se prueban sin token Turnstile válido para impedir efectos comerciales. Ejecutar en ventana controlada desde una IP de prueba y esperar una ventana completa al terminar.
+
+```powershell
+$env:LF015_PUBLIC_LEAD_URL = 'https://<IP-ESTATICA-AUTORIZADA>/lead'
+$env:LF015_ALLOWED_ORIGIN = 'https://emactivaspa.lovable.app'
+$env:LF015_RATE_REQUESTS = '<CUOTA-CONFIGURADA>'
+@'
+import json,os,urllib.request
+from urllib.error import HTTPError
+url=os.environ['LF015_PUBLIC_LEAD_URL']; origin=os.environ['LF015_ALLOWED_ORIGIN']; limit=int(os.environ['LF015_RATE_REQUESTS'])
+def send(body):
+ r=urllib.request.Request(url,data=body,method='POST',headers={'Content-Type':'application/json','Origin':origin,'X-LeadFlow-Submission-Id':'00000000-0000-4000-8000-000000000001'})
+ try:
+  with urllib.request.urlopen(r,timeout=10) as x: return x.status
+ except HTTPError as e: e.read(); return e.code
+print('oversize_http='+str(send(json.dumps({'mensaje':'x'*20000},separators=(',',':')).encode())))
+print('invalid_http='+str(send(b'{}')))
+codes=[send(b'{}') for _ in range(limit+1)]
+print('rate_429='+str(429 in codes)+' attempts='+str(len(codes)))
+'@ | python -
+```
+
+PASS: inválido 4xx, sobredimensionado 413, al menos un 429 y ningún 2xx. La ausencia de 429 es FAIL; no aumentar intentos indefinidamente.
+
+#### Bloque A3 — sanitización, Slack y viabilidad HubSpot (SSH VM + interfaces visuales)
+
+Justificación: la sanitización y la entrega real de alertas no quedan acreditadas por pruebas unitarias; la notificación nativa HubSpot es una capacidad ambiental, no desarrollo.
+
+```bash
+# SSH VM: emitir una sola alerta técnica mediante el Adapter y su identidad ya inyectada.
+ADAPTER_ID="$(docker ps -q --filter label=com.docker.compose.project=emactiva-leadflow --filter label=com.docker.compose.service=adapters)"
+test -n "$ADAPTER_ID"
+docker exec -i "$ADAPTER_ID" python - <<'PY'
+import json,os,urllib.request
+p={'execution_id':'lf_exec_lf015_t03_alert_gate','stage':'enrichment','error_code':'synthetic_gate'}
+r=urllib.request.Request('http://127.0.0.1:8080/alert',data=json.dumps(p,separators=(',',':')).encode(),method='POST',headers={'Content-Type':'application/json','X-LeadFlow-Adapter-Key':os.environ['ADAPTER_SERVICE_KEY']})
+with urllib.request.urlopen(r,timeout=10) as x: print('alert_http='+str(x.status))
+PY
+
+# Escaneo por canarios/campos prohibidos: solo conteos, nunca líneas de log.
+for service in adapters n8n web-bridge rate-gate caddy; do
+  id="$(docker ps -q --filter label=com.docker.compose.service="$service" | head -n1)"
+  test -z "$id" || docker logs --since 15m "$id" 2>&1 | python3 -c "import re,sys; s=sys.stdin.read(); print('$service sensitive_hits='+str(len(re.findall(r'(?i)(authorization:|x-turnstile-token|x-leadflow-key|\\\"email\\\"|\\\"telefono\\\"|\\\"mensaje\\\")',s))))"
+done
+```
+
+En Slack (interfaz visual), exigir exactamente una alerta técnica `lf_exec_lf015_t03_alert_gate`, sin email/payload/token; registrar hora y eliminarla solo si la política del canal lo autoriza. En HubSpot (interfaz visual), revisar **Settings → Notifications** y **Automation/Workflows**: registrar si existe una notificación nativa configurable para creación de contacto/ticket. No habilitarla ni crear workflow; ausencia queda WARN/NOT_VERIFIED para #18, no FAIL SYSTEM.
+
+#### Bloque A4 — restore aislado del backup 2026-11-14 (Cloud Shell + SSH VM)
+
+Justificación: resta por acreditar resiliencia ambiental del artefacto productivo; se reutilizan `preflight_restore.py`, `restore.sh` y el override aislado. Requiere ventana y autorización separadas, identidad restore, bundle DSR independiente y claves externas.
+
+```bash
+# Google Cloud Shell, read-only: seleccionar URI exacta del 14/11 y sus sidecars; no descargar.
+gcloud storage ls --long 'gs://emactiva-leadflow-pilot-backups/**' | grep '20261114T'
+```
+
+```bash
+# SSH VM bajo identidad restore; archivo externo 0600, directorio de estado 0700.
+cd "$LEADFLOW_ROOT"
+set -a; source "$LF015_RESTORE_ENV"; set +a
+python3 scripts/backup/preflight_restore.py; PREFLIGHT_RC=$?
+test "$PREFLIGHT_RC" -eq 0 -o "$PREFLIGHT_RC" -eq 2
+docker compose -p "$RESTORE_COMPOSE_PROJECT" -f compose.yaml -f "$RESTORE_COMPOSE_OVERRIDE" up -d postgres n8n
+bash scripts/backup/restore.sh
+STATE_FILE="$RESTORE_STATE_DIR/restore-${RESTORE_GCS_URI##*/}.state"
+grep -qx 'status=PASS' "$STATE_FILE"
+grep -qx 'traffic=DISABLED' "$STATE_FILE"
+# Ejecutar los checks de migraciones, conteos, n8n interno y DSR 42501 del runbook; no habilitar tráfico.
+```
+
+Un preflight RC=2 solo puede continuar si la única salida NOT_VERIFIED es el control IAM/GCS que el operador acredita por identidad/lectura separada; cualquier FAIL detiene. Tras capturar RPO/RTO, hashes y estado técnico, cleanup exclusivo del proyecto restore: `docker compose -p "$RESTORE_COMPOSE_PROJECT" -f compose.yaml -f "$RESTORE_COMPOSE_OVERRIDE" down -v --remove-orphans`. Nunca usar el proyecto productivo o QA.
+
+#### Bloque B — cleanup integral pendiente de autorización independiente
+
+1. **Dry-run obligatorio (SSH VM/HubSpot/Cloud Shell):** exportar solo IDs técnicos y conteos de los 7 registros PostgreSQL; aprobar una lista exacta de contactos/tickets/empresas sintéticos en HubSpot; confirmar que n8n conserva únicamente `leadflow-core-initial`; listar proyectos/volúmenes Docker por labels; listar exactamente los tres URI preflight GCS. No usar comodines para borrar.
+2. **HubSpot (interfaz visual o API administrativa autorizada):** eliminar únicamente IDs aprobados, primero tickets/asociaciones y después contactos/empresas; reconciliar conteos. No usar el Adapter runtime como borrado masivo.
+3. **PostgreSQL (SSH VM):** no ejecutar DELETE directo. Mantener evidencia hasta que sea elegible y usar exclusivamente `pwsh -NoProfile -File scripts/database/purge_retention.ps1` con la política vigente. Si se exige borrado inmediato de datos sintéticos no vencidos, queda BLOCKED hasta aprobar un mecanismo administrativo específico; no reducir retención para acelerar cleanup.
+4. **n8n/Docker (SSH VM):** no eliminar el workflow productivo. Para cada proyecto QA aprobado explícitamente, verificar labels y ejecutar individualmente `docker compose --project-name <PROYECTO-QA-EXACTO> -f <COMPOSE-QA-EXACTO> down -v --remove-orphans`; abortar si comparte red/volumen con `emactiva-leadflow`.
+5. **GCS (Google Cloud Shell):** guardar tres URI exactos en una lista revisada, exigir conteo 3 y ejecutar `gcloud storage rm "${uris[0]}" "${uris[1]}" "${uris[2]}"` únicamente con identidad administrativa. Preservar backups cifrados, `.sha256`, evidencias DSR y lifecycle.
+6. **Post-check y nueva línea base (SSH VM):** seis contenedores productivos healthy, workflow único, cero recursos QA aprobados, conteos PostgreSQL/HubSpot reconciliados, Slack limpio según política y tres preflight ausentes. Después ejecutar una sola vez `bash scripts/backup/backup.sh` bajo la identidad/configuración oficial; exigir artefacto cifrado + checksum create-only y registrar timestamp/hash sin descargar datos.
+
+**Gate de autorización:** ninguna instrucción destructiva de este bloque se ejecuta junto con el dry-run. La autorización debe adjuntar el manifiesto exacto de IDs/proyectos/volúmenes/URI y aprobar cada clase de eliminación. Producción, secretos, migraciones, roles, DSR, retención, backups y rollback quedan fuera del cleanup.
+
+#### Estado para cierre #17
+
+- **PASS reportado/reutilizado:** publicación, despliegue, conexión Lovable, flujo comercial, remediación/recovery e idempotencia.
+- **NOT_VERIFIED ENVIRONMENT:** A1–A4 hasta ejecución supervisada; entrega Slack efectiva y viabilidad de notificación HubSpot; restore productivo aislado y RPO/RTO.
+- **WARN/BLOCKED:** cleanup inmediato PostgreSQL de filas no elegibles por retención carece de mecanismo administrativo aprobado; no se improvisa SQL destructivo.
+- #17 puede cerrarse solo con evidencia sanitizada PASS de autenticación/aislamiento, entradas/rate limit, logs/Slack y restore aislado, más decisión explícita sobre la notificación HubSpot. El cleanup integral y la entrega operativa continúan bajo autorización separada y ticket #18; LF015-T03 y LAB-LF-015 permanecen abiertos.
+
+#### A3.1 — Remediación Slack Adapter
+
+- **FAIL ENVIRONMENT observado:** `/alert` respondió HTTP 200 con `delivered=false`. La causa concreta del rechazo de Slack continúa NOT_VERIFIED hasta redespliegue y prueba real.
+- **Causa SYSTEM corregida:** el Adapter enviaba el contrato canónico directamente al Incoming Webhook y el transporte común exigía JSON, aunque Slack requiere `{ "text": "..." }` y confirma con `text/plain: ok`. El contrato Core→Adapter no cambió.
+- **Implementación:** `deliver_alert` genera una línea técnica determinista sin PII, usa respuesta `text`, acepta éxito solo ante HTTP 2xx + `ok`, clasifica rechazos permanentes sin retry, aplica el presupuesto vigente solo a HTTP temporales explícitos y no reenvía errores de transporte `status=0` por su resultado ambiguo. Los diagnósticos usan exclusivamente la allowlist operation/stage/error_type/error_code/http_status/retry_count. El mock Slack acepta el wire contract real y conserva su interfaz de stats canónica.
+- **PASS SYSTEM:** prueba focalizada 5/5: formato Slack, `text/plain ok`, rechazo 400 sin retry, transporte ambiguo sin retry, 503 con retry acotado y compatibilidad del mock oficial. Compilación Python PASS; servidores/subproceso locales cerrados por cleanup. Slack real permanece NOT_VERIFIED.
+
+Redespliegue exclusivo del Adapter, bajo ventana autorizada: transferir únicamente `adapters/server.py`, comparar SHA-256 local/VM y luego ejecutar en SSH VM:
+
+```bash
+cd "$LEADFLOW_ROOT"
+python3 scripts/admin/compose_with_secrets.py preflight --map "$LEADFLOW_SECRET_MAP_FILE"
+docker ps --filter label=com.docker.compose.project=emactiva-leadflow \
+  --format '{{.Label "com.docker.compose.service"}}|{{.ID}}' > /tmp/lf015-adapter-before.txt
+docker image tag leadflow-adapters:python-3.14.3 "leadflow-adapters:lf015-slack-rollback-$(date -u +%Y%m%dT%H%M%SZ)"
+python3 - <<'PY'
+import os,subprocess
+from pathlib import Path
+from scripts.admin.compose_with_secrets import resolved_environment,COMPOSE_FILES,ROOT
+env=resolved_environment(Path(os.environ['LEADFLOW_SECRET_MAP_FILE']))
+base=['docker','compose','-f',str(COMPOSE_FILES[0]),'-f',str(COMPOSE_FILES[1])]
+for tail in (['build','adapters'],['up','-d','--no-deps','adapters']):
+ r=subprocess.run(base+tail,cwd=ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ if r.returncode: raise SystemExit(r.returncode)
+PY
+docker ps --filter label=com.docker.compose.project=emactiva-leadflow \
+  --format '{{.Label "com.docker.compose.service"}}|{{.ID}}' > /tmp/lf015-adapter-after.txt
+python3 - <<'PY'
+from pathlib import Path
+def load(path): return dict(line.split('|',1) for line in Path(path).read_text().splitlines() if '|' in line)
+before=load('/tmp/lf015-adapter-before.txt'); after=load('/tmp/lf015-adapter-after.txt')
+assert len(before)==len(after)==6 and before.keys()==after.keys()
+assert before['adapters']!=after['adapters']
+assert all(before[name]==after[name] for name in before if name!='adapters')
+print('adapter_only_recreated=PASS')
+PY
+rm -f /tmp/lf015-adapter-before.txt /tmp/lf015-adapter-after.txt
+test "$(docker inspect -f '{{.State.Health.Status}}' "$(docker ps -q --filter label=com.docker.compose.project=emactiva-leadflow --filter label=com.docker.compose.service=adapters)")" = healthy
+```
+
+Exigir Adapter con ID nuevo y healthy; los otros cinco IDs deben coincidir. Validación productiva única, sin exponer la clave:
+
+```bash
+ADAPTER_ID="$(docker ps -q --filter label=com.docker.compose.project=emactiva-leadflow --filter label=com.docker.compose.service=adapters)"
+docker exec -i "$ADAPTER_ID" python - <<'PY'
+import json,os,urllib.request
+p={'execution_id':'lf_exec_lf015_t03_slack_gate','stage':'alert','error_code':'synthetic_gate'}
+r=urllib.request.Request('http://127.0.0.1:8080/alert',data=json.dumps(p,separators=(',',':')).encode(),method='POST',headers={'Content-Type':'application/json','X-LeadFlow-Adapter-Key':os.environ['ADAPTER_SERVICE_KEY']})
+with urllib.request.urlopen(r,timeout=10) as x:
+ v=json.loads(x.read()); print('slack_gate_http='+str(x.status)+' delivered='+str(v.get('delivered') is True))
+PY
+docker logs --since 10m "$ADAPTER_ID" 2>&1 | python3 -c "import re,sys; s=sys.stdin.read(); print('sensitive_hits='+str(len(re.findall(r'(?i)(authorization:|hooks\\.slack|x-leadflow-adapter-key|\\\"email\\\"|\\\"telefono\\\"|\\\"mensaje\\\")',s))))"
+```
+
+PASS requiere `slack_gate_http=200 delivered=True`, una alerta visual técnica sin PII y `sensitive_hits=0`. Ante fallo, conservar evidencia sanitizada, restaurar la etiqueta rollback como `leadflow-adapters:python-3.14.3` y repetir únicamente el `up --no-deps adapters` mediante el mismo entorno en memoria. No recrear Core, n8n, PostgreSQL, Gateway ni Bridge.

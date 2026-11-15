@@ -86,14 +86,20 @@ CONFIG=None
 def opaque_config_value(value):
  return isinstance(value,str) and bool(value) and len(value)<=200 and not any(ord(char)<33 or ord(char)>126 for char in value)
 
-def call(method,url,body=None,headers=None):
+def call(method,url,body=None,headers=None,response_format="json"):
+ if response_format not in {"json","text"}: raise ValueError("invalid response format")
  data=None if body is None else json.dumps(body,separators=(",",":")).encode(); request_headers={"Content-Type":"application/json",**(headers or {})}
+ def decoded(raw):
+  if response_format=="text":
+   try: return raw.decode("utf-8")
+   except UnicodeDecodeError: return ""
+  return json.loads(raw) if raw else {}
  try:
   with urlopen(Request(url,data=data,method=method,headers=request_headers),timeout=CONFIG["timeout_ms"]/1000) as response:
-   raw=response.read(); return response.status,dict(response.headers),json.loads(raw) if raw else {}
+   raw=response.read(); return response.status,dict(response.headers),decoded(raw)
  except HTTPError as error:
   raw=error.read()
-  try: body=json.loads(raw) if raw else {}
+  try: body=decoded(raw)
   except (json.JSONDecodeError,UnicodeDecodeError): body={}
   return error.code,dict(error.headers),body
  except (URLError,TimeoutError): return 0,{},{}
@@ -143,6 +149,22 @@ def request_with_retry(method,base,path,body,operation=None):
   if 200<=last[0]<300 or not retryable(last[0]) or attempt==CONFIG["attempts"]: return (*last,attempt-1)
   wait(last[1],last[0],attempt)
  return (*last,CONFIG["attempts"]-1)
+
+def deliver_alert(payload):
+ text=f"LeadFlow alert | execution_id={payload['execution_id']} | stage={payload['stage']} | error_code={payload['error_code']}"
+ last_status=0
+ for attempt in range(1,CONFIG["attempts"]+1):
+  status,headers,body=call("POST",CONFIG["alert"],{"text":text},response_format="text"); last_status=status
+  if 200<=status<300:
+   delivered=body.strip().lower()=="ok"
+   if not delivered: LOGGER.emit("WARNING","slack_delivery_rejected",operation="alert.send",stage="alert",error_type="upstream_error",error_code="invalid_response",http_status=status,retry_count=attempt-1)
+   return {"delivered":delivered,"alert_error_code":None if delivered else "slack_delivery_failed","retry_count":attempt-1}
+  if status==0 or not retryable(status) or attempt==CONFIG["attempts"]:
+   error=failure("alert",status,attempt-1,headers)
+   LOGGER.emit("WARNING","slack_delivery_failed",operation="alert.send",stage="alert",error_type=error["error_type"],error_code=error["error_code"],http_status=error["http_status"],retry_count=attempt-1)
+   return {"delivered":False,"alert_error_code":"slack_delivery_failed","retry_count":attempt-1}
+  wait(headers,status,attempt)
+ return {"delivered":False,"alert_error_code":"slack_delivery_failed","retry_count":CONFIG["attempts"]-1}
 
 def safe_ambiguous_create_retry(capabilities):
  return bool(capabilities.get("idempotent_create_operation_key") or (capabilities.get("consistent_lookup_after_create") and capabilities.get("unique_email")))
@@ -531,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
   elif self.path=="/alert":
    allowed={"execution_id","stage","error_code"}
    if set(payload)!=allowed or not opaque_id(payload.get("execution_id")) or not technical_code(payload.get("stage"),"") or not technical_code(payload.get("error_code"),""): return self.respond(400,{"delivered":False,"error_code":"invalid_alert"})
-   status,_,_=call("POST",CONFIG["alert"],payload); result={"delivered":200<=status<300,"alert_error_code":None if 200<=status<300 else "slack_delivery_failed"}
+   result=deliver_alert(payload)
   else: return self.respond(404,{"error":canonical_error(404)})
   self.respond(200,result)
  def do_PATCH(self):
