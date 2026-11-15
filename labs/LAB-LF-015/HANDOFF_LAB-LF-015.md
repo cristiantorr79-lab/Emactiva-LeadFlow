@@ -700,8 +700,8 @@ Un preflight RC=2 solo puede continuar si la única salida NOT_VERIFIED es el co
 #### Bloque B — cleanup integral pendiente de autorización independiente
 
 1. **Dry-run obligatorio (SSH VM/HubSpot/Cloud Shell):** exportar solo IDs técnicos y conteos de los 7 registros PostgreSQL; aprobar una lista exacta de contactos/tickets/empresas sintéticos en HubSpot; confirmar que n8n conserva únicamente `leadflow-core-initial`; listar proyectos/volúmenes Docker por labels; listar exactamente los tres URI preflight GCS. No usar comodines para borrar.
-2. **HubSpot (interfaz visual o API administrativa autorizada):** eliminar únicamente IDs aprobados, primero tickets/asociaciones y después contactos/empresas; reconciliar conteos. No usar el Adapter runtime como borrado masivo.
-3. **PostgreSQL (SSH VM):** no ejecutar DELETE directo. Mantener evidencia hasta que sea elegible y usar exclusivamente `pwsh -NoProfile -File scripts/database/purge_retention.ps1` con la política vigente. Si se exige borrado inmediato de datos sintéticos no vencidos, queda BLOCKED hasta aprobar un mecanismo administrativo específico; no reducir retención para acelerar cleanup.
+2. **HubSpot (SSH VM/API oficial):** usar exclusivamente `scripts/admin/cleanup_lf015_hubspot.py`. El inventario obtiene solo IDs técnicos, exige exactamente 13 contactos/4 tickets/2 empresas y los IDs conocidos, crea manifiesto `0600` sin PII y no modifica nada. Apply exige el SHA-256 aprobado, vuelve a inventariar, rechaza objetos inesperados y archiva en orden tickets→contactos→empresas; una interrupción se reconcilia repitiendo el mismo manifiesto. No afirma eliminación física.
+3. **PostgreSQL (SSH VM):** usar exclusivamente `scripts/admin/cleanup_lf015_postgres.py`. Dry-run exige exactamente los siete IDs, 27 eventos, cero contextos/holds/dependencias ajenas y ninguna ejecución adicional. Apply exige el SHA-256 aprobado y ejecuta bajo el migrator una transacción serializable con advisory/table locks; elimina solo eventos/contextos/ejecuciones autorizados, conserva DSR y es idempotente. No cambia retención ni usa TRUNCATE/DDL.
 4. **n8n/Docker (SSH VM):** no eliminar el workflow productivo. Para cada proyecto QA aprobado explícitamente, verificar labels y ejecutar individualmente `docker compose --project-name <PROYECTO-QA-EXACTO> -f <COMPOSE-QA-EXACTO> down -v --remove-orphans`; abortar si comparte red/volumen con `emactiva-leadflow`.
 5. **GCS (Google Cloud Shell):** guardar tres URI exactos en una lista revisada, exigir conteo 3 y ejecutar `gcloud storage rm "${uris[0]}" "${uris[1]}" "${uris[2]}"` únicamente con identidad administrativa. Preservar backups cifrados, `.sha256`, evidencias DSR y lifecycle.
 6. **Post-check y nueva línea base (SSH VM):** seis contenedores productivos healthy, workflow único, cero recursos QA aprobados, conteos PostgreSQL/HubSpot reconciliados, Slack limpio según política y tres preflight ausentes. Después ejecutar una sola vez `bash scripts/backup/backup.sh` bajo la identidad/configuración oficial; exigir artefacto cifrado + checksum create-only y registrar timestamp/hash sin descargar datos.
@@ -712,8 +712,66 @@ Un preflight RC=2 solo puede continuar si la única salida NOT_VERIFIED es el co
 
 - **PASS reportado/reutilizado:** publicación, despliegue, conexión Lovable, flujo comercial, remediación/recovery e idempotencia.
 - **NOT_VERIFIED ENVIRONMENT:** A1–A4 hasta ejecución supervisada; entrega Slack efectiva y viabilidad de notificación HubSpot; restore productivo aislado y RPO/RTO.
-- **WARN/BLOCKED:** cleanup inmediato PostgreSQL de filas no elegibles por retención carece de mecanismo administrativo aprobado; no se improvisa SQL destructivo.
+- **NOT_VERIFIED ENVIRONMENT:** los mecanismos B2/B4 están preparados y probados localmente, pero inventario, manifests, archivado HubSpot, transacción PostgreSQL y post-check no se ejecutaron en producción.
 - #17 puede cerrarse solo con evidencia sanitizada PASS de autenticación/aislamiento, entradas/rate limit, logs/Slack y restore aislado, más decisión explícita sobre la notificación HubSpot. El cleanup integral y la entrega operativa continúan bajo autorización separada y ticket #18; LF015-T03 y LAB-LF-015 permanecen abiertos.
+
+#### B2 + B4 — mecanismos de cleanup integral (SYSTEM, 2026-11-15)
+
+- **PASS SYSTEM:** HubSpot usa el resolver existente de Secret Manager y recupera únicamente `CRM_API_KEY` en memoria. El manifiesto create-only contiene exclusivamente tipos, conteos e IDs técnicos. Inventario divergente, objetos inesperados, autorización SHA incorrecta, HTTP/permiso/transporte y reconciliación incompleta fallan cerrado. DELETE de HubSpot se registra como archivado lógico, no eliminación física.
+- **PASS SYSTEM:** PostgreSQL identifica el único contenedor `emactiva-leadflow/postgres` por labels, usa el rol migrator existente dentro del contenedor y no transporta contraseña. La transacción revalida inventario y dependencias bajo locks, rechaza cualquier hold, elimina únicamente los siete IDs/27 eventos autorizados y verifica que los conteos DSR permanezcan idénticos. Estado totalmente ausente es idempotente; estado parcial o ajeno es FAIL.
+- **PASS QA focalizada:** `python -m unittest scripts.test.test_lf015_cleanup` = 9/9; compilación Python PASS. Cubiertos dry-run/manifiesto create-only, orden, mismatch, dependencia ajena, fallo parcial HubSpot recuperable, apply repetido, rollback delegado a transacción PostgreSQL, preservación DSR y salidas sanitizadas. No hubo API, Docker, GCP ni datos reales.
+- **WARN:** la API de objetos HubSpot archiva; la eliminación definitiva depende de la política/capacidades del portal. No se amplían permisos ni se invoca GDPR delete.
+- **NOT_VERIFIED ENVIRONMENT:** mapa externo/identidad efectiva, permisos HubSpot, inventario exacto actual, rol migrator efectivo, locks y commit/rollback en PostgreSQL productivo. PostgreSQL solo puede continuar después de `apply` y `verify` HubSpot PASS con el mismo manifiesto autorizado.
+
+Ejecución agrupada posterior, desde SSH de `leadflow-pilot-01`, solo después de transferir/verificar los dos scripts y con el checkout en la raíz del repositorio. No inicializa autoridad DSR ni toca Docker/GCS adicionales:
+
+```bash
+set -Eeuo pipefail
+umask 077
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+test -f scripts/admin/cleanup_lf015_hubspot.py
+test -f scripts/admin/cleanup_lf015_postgres.py
+test -n "${LEADFLOW_SECRET_MAP_FILE:-}" -a -f "$LEADFLOW_SECRET_MAP_FILE"
+test "$(stat -c '%a' "$LEADFLOW_SECRET_MAP_FILE")" = 600
+STATE=/home/cristiantorr79/lf015-cleanup-20261115
+test ! -e "$STATE"
+install -d -m 700 "$STATE"
+
+# 1. Preflight/manifiestos: no elimina nada y no imprime PII.
+python3 scripts/admin/cleanup_lf015_hubspot.py inventory \
+  --map "$LEADFLOW_SECRET_MAP_FILE" --manifest "$STATE/hubspot.json"
+python3 scripts/admin/cleanup_lf015_postgres.py dry-run \
+  --manifest "$STATE/postgres.json"
+HUB_SHA="$(sha256sum "$STATE/hubspot.json" | awk '{print $1}')"
+PG_SHA="$(sha256sum "$STATE/postgres.json" | awk '{print $1}')"
+printf 'hubspot_manifest_sha256=%s\npostgres_manifest_sha256=%s\n' "$HUB_SHA" "$PG_SHA"
+printf 'Aprobar SHA HubSpot exacto: '; IFS= read -r HUB_APPROVED
+printf 'Aprobar SHA PostgreSQL exacto: '; IFS= read -r PG_APPROVED
+test "$HUB_APPROVED" = "$HUB_SHA"
+test "$PG_APPROVED" = "$PG_SHA"
+
+# 2. HubSpot primero. Un FAIL detiene el shell antes de PostgreSQL.
+python3 scripts/admin/cleanup_lf015_hubspot.py apply \
+  --map "$LEADFLOW_SECRET_MAP_FILE" --manifest "$STATE/hubspot.json" \
+  --authorize-manifest-sha256 "$HUB_APPROVED"
+python3 scripts/admin/cleanup_lf015_hubspot.py verify \
+  --map "$LEADFLOW_SECRET_MAP_FILE" --manifest "$STATE/hubspot.json" \
+  --authorize-manifest-sha256 "$HUB_APPROVED"
+
+# 3. PostgreSQL transaccional, solo tras reconciliación HubSpot PASS.
+python3 scripts/admin/cleanup_lf015_postgres.py apply \
+  --manifest "$STATE/postgres.json" --authorize-manifest-sha256 "$PG_APPROVED"
+python3 scripts/admin/cleanup_lf015_postgres.py verify \
+  --manifest "$STATE/postgres.json" --authorize-manifest-sha256 "$PG_APPROVED"
+
+# 4. Post-check minimizado. Debe devolver seis servicios healthy.
+test "$(docker ps --filter label=com.docker.compose.project=emactiva-leadflow \
+  --filter health=healthy --format '{{.ID}}' | wc -l)" -eq 6
+printf 'lf015_cleanup post_check=PASS manifests=%s\n' "$STATE"
+```
+
+Conservar ambos manifiestos como evidencia técnica protegida hasta completar revisión; no contienen PII. No ejecutar `rm` sobre `STATE` en la misma ventana. Ante FAIL HubSpot, repetir únicamente `apply/verify` HubSpot con el mismo SHA; ante FAIL PostgreSQL, la transacción revierte y se conserva el manifiesto para diagnóstico/reintento.
 
 #### A3.1 — Remediación Slack Adapter
 
