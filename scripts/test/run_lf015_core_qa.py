@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json, os, re, shutil, socket, ssl, subprocess, tempfile, time, urllib.request, uuid
+from urllib.error import HTTPError
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,7 +71,7 @@ def main() -> int:
     synthetic = {
         "POSTGRES_DB":"leadflow_core_qa", "POSTGRES_BOOTSTRAP_USER":"lf015_bootstrap", "POSTGRES_BOOTSTRAP_PASSWORD":"synthetic-bootstrap-0000000000000001",
         "POSTGRES_MIGRATOR_USER":"lf015_migrator", "POSTGRES_MIGRATOR_PASSWORD":"synthetic-migrator-0000000000000002", "POSTGRES_APP_USER":"lf015_app", "POSTGRES_APP_PASSWORD":"synthetic-app-00000000000000000003",
-        "POSTGRES_ROLE_SYNC_USER":"lf015_bootstrap", "APP_ENV":"development", "CRM_PROVIDER":"mock", "ENRICHMENT_PROVIDER":"mock", "N8N_ENCRYPTION_KEY":"synthetic-n8n-key-0000000000000000000001",
+        "POSTGRES_ROLE_SYNC_USER":"lf015_bootstrap", "APP_ENV":"development", "CRM_PROVIDER":"mock", "ENRICHMENT_PROVIDER":"mock", "N8N_ENCRYPTION_KEY":"synthetic-n8n-key-0000000000000000000001", "RETRY_DELAY_FIRST_SECONDS":"1", "RETRY_DELAY_SECOND_SECONDS":"1",
         "LEADFLOW_WEBHOOK_KEY":"synthetic-webhook-key-00000000000000000001", "LEADFLOW_ALLOWED_SOURCES":"emactiva_web", "LEADFLOW_ALLOWED_INTERESTS":"automatizacion", "DSR_SUBJECT_KEY":"synthetic-dsr-key-0000000000000000000001",
         "RECOVERY_CONTEXT_KEY":"synthetic-recovery-key-000000000000000001", "ADAPTER_SERVICE_KEY":"synthetic-adapter-key-0000000000000000001", "DSR_ADAPTER_SERVICE_KEY":"synthetic-dsr-adapter-000000000000000001",
         "ADAPTER_ALLOWED_OPERATIONS":"crm.process,crm.update_enrichment,crm.record_interaction,crm.reconcile_interaction,enrichment.enrich,alert.send,crm.capabilities", "LF015_CORE_QA_NETWORK":"lf015_core_qa_internal", "LEADFLOW_N8N_LOCAL_DIR":str(temp / "n8n"), "LEADFLOW_N8N_PROBE_MODE":"container",
@@ -111,16 +112,42 @@ def main() -> int:
         def submit(sid, message):
             body=json.dumps({"nombre":"Synthetic","apellido":"QA","email":"lead@example.invalid","negocio":"QA","telefono":"+56900000000","interes":"automatizacion","mensaje":message},separators=(",",":")).encode()
             req=urllib.request.Request("https://localhost:18447/lead",body,method="POST",headers={"Content-Type":"application/json","Origin":"https://form.example.invalid","X-LeadFlow-Submission-Id":sid,"X-Turnstile-Token":"synthetic-token"})
-            with urllib.request.urlopen(req,context=context,timeout=20) as response: return response.status
+            try:
+                with urllib.request.urlopen(req,context=context,timeout=20) as response: return response.status
+            except HTTPError as error:
+                error.read()
+                return error.code
+        def configure_crm_apply_failure():
+            code="import urllib.request;d=b'{\"mode\":\"http_502\",\"operation\":\"update_enrichment\",\"failures\":3}';r=urllib.request.Request('http://127.0.0.1:8080/control/failure',data=d,method='POST',headers={'Content-Type':'application/json'});print(urllib.request.urlopen(r,timeout=3).status)"
+            result=run(compose(CORE_PROJECT,CORE_FILES,"exec","-T","crm-mock","python","-c",code),env,capture=True)
+            if result.stdout.strip()!="200": raise GateError("crm_failure_fixture")
+        def psql_scalar(sql, user=None):
+            return run(compose(CORE_PROJECT,CORE_FILES,"exec","-T","postgres","psql","-X","-Atq","-U",user or synthetic["POSTGRES_APP_USER"],"-d",synthetic["POSTGRES_DB"],"-c",sql),env,capture=True).stdout.strip()
         first=str(uuid.uuid4()); second=str(uuid.uuid4())
         statuses=[submit(first,"Synthetic first"),submit(second,"Synthetic second"),submit(first,"Synthetic first")]
+        configure_crm_apply_failure()
+        statuses.append(submit(str(uuid.uuid4()),"Synthetic apply failure"))
+        state_sql=("SELECT count(*) FILTER (WHERE e.status='success')||'|'"
+                   "||count(*) FILTER (WHERE e.status='success' AND e.enrichment_status='success')||'|'"
+                   "||count(*) FILTER (WHERE e.interaction_status='confirmed')||'|'"
+                   "||count(*) FILTER (WHERE e.status='duplicate')||'|'"
+                   "||count(*) FILTER (WHERE e.status='failed' AND e.stage='enrichment' AND e.enrichment_status='failed')||'|'"
+                   "||count(*) FILTER (WHERE e.status IN ('processing','retrying'))||'|'"
+                   "||count(c.execution_id) FILTER (WHERE e.status='success')||'|'"
+                   "||count(*)||'|'||count(DISTINCT e.idempotency_key)||'|'||count(DISTINCT e.lead_identifier) "
+                   "FROM leadflow.executions e LEFT JOIN leadflow.recovery_contexts c USING(execution_id);")
+        deadline=time.monotonic()+20; db=""
+        while time.monotonic()<deadline:
+            db=psql_scalar(state_sql,synthetic["POSTGRES_BOOTSTRAP_USER"])
+            if re.fullmatch(r"\d+(\|\d+){9}",db) and db.split("|")[5]=="0" and sum(map(int,(db.split("|")[0],db.split("|")[3],db.split("|")[4])))==4: break
+            time.sleep(1)
         stats=json.loads(run(compose(CORE_PROJECT,CORE_FILES,"exec","-T","crm-mock","python","-c","import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8080/stats').read().decode())"),env,capture=True).stdout)
-        sql="SELECT count(DISTINCT idempotency_key)||'|'||count(DISTINCT lead_identifier)||'|'||count(*) FILTER (WHERE interaction_status='confirmed')||'|'||count(*) FROM leadflow.executions;"
-        db=run(compose(CORE_PROJECT,CORE_FILES,"exec","-T","postgres","psql","-X","-Atq","-U",synthetic["POSTGRES_APP_USER"],"-d",synthetic["POSTGRES_DB"],"-c",sql),env,capture=True).stdout.strip()
-        if stats.get("contacts")!=1 or stats.get("interactions")!=2 or db!="2|1|2|3":
-            safe_db=db if re.fullmatch(r"\d+\|\d+\|\d+\|\d+",db) else "invalid"
-            raise GateError(f"state_mismatch:http_{'-'.join(map(str,statuses))}:db_{safe_db}:crm_{stats.get('contacts')}-{stats.get('interactions')}")
-        print(f"core_qa status=PASS http={','.join(map(str,statuses))} db=2|1|2 executions=3 crm=1|2 idempotency=PASS external_effects=0")
+        if stats.get("contacts")!=1 or stats.get("interactions")!=3 or db!="2|2|3|1|1|0|0|4|3|1" or statuses[:3]!=[202,202,202] or statuses[3]!=503:
+            safe_db=db if re.fullmatch(r"\d+(\|\d+){9}",db) else "invalid"
+            detail=psql_scalar("SELECT coalesce(string_agg(status||':'||stage||':'||coalesce(error_code,'none'),',' ORDER BY status,stage),'none') FROM leadflow.executions;")
+            safe_detail=detail if re.fullmatch(r"[a-z0-9_:-]+(,[a-z0-9_:-]+)*",detail) else "invalid"
+            raise GateError(f"terminal_state_mismatch:http_{'-'.join(map(str,statuses))}:db_{safe_db}:states_{safe_detail}:crm_{stats.get('contacts')}-{stats.get('interactions')}")
+        print(f"core_qa status=PASS http={','.join(map(str,statuses))} db=success_2|enriched_2|interaction_3|failed_apply_1|duplicate_1|pending_0|contexts_0 crm=1|3 idempotency=PASS external_effects=0")
     except Exception as exc:
         failed = str(exc) if isinstance(exc,GateError) else "unexpected_failure"
         print(f"core_qa status=FAIL phase={failed}")

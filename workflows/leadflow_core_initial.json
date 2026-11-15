@@ -314,58 +314,46 @@
     {
       "id": "apply-created",
       "name": "Apply Enrichment Created",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         1100,
         -200
       ],
       "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.CRM_ADAPTER_URL + '/crm/update-enrichment/' + $json.contact_id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-LeadFlow-Adapter-Key",
-              "value": "={{ $env.ADAPTER_SERVICE_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({fields: $json.data}) }}",
-        "options": {}
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input=$json; const fields=input.data&&typeof input.data==='object'?input.data:{}; const base={...input,retry_count:Number(input.retry_count||0)}; if(!Object.keys(fields).length)return {json:{...base,success:true,apply_skipped:true}}; try{const response=await helpers.httpRequest({method:'PATCH',url:$env.CRM_ADAPTER_URL+'/crm/update-enrichment/'+input.contact_id,headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{fields},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000)),returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(response.statusCode||0); const result=response.body&&typeof response.body==='object'?response.body:{}; const retries=base.retry_count+Number(result.retry_count||0); if(status>=200&&status<300&&result.success!==false)return {json:{...base,success:true,retry_count:retries}}; const original=Number(result.http_status||status||0); const allowed=new Set(['validation_error','authentication_error','rate_limit','timeout','upstream_error']); return {json:{...base,success:false,stage:'enrichment',error_type:allowed.has(result.error_type)?result.error_type:'upstream_error',error_code:typeof result.error_code==='string'&&/^[a-z0-9_]{1,100}$/.test(result.error_code)?result.error_code:(original?'http_'+original:'adapter_unavailable'),retry_count:retries}};}catch(error){const timeout=error&&(/timeout/i.test(String(error.name||''))||/timeout/i.test(String(error.message||''))); return {json:{...base,success:false,stage:'enrichment',error_type:timeout?'timeout':'upstream_error',error_code:timeout?'timeout':'adapter_unavailable'}};}"
       }
     },
     {
       "id": "apply-updated",
       "name": "Apply Enrichment Updated",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         1100,
         -400
       ],
       "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.CRM_ADAPTER_URL + '/crm/update-enrichment/' + $json.contact_id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "X-LeadFlow-Adapter-Key",
-              "value": "={{ $env.ADAPTER_SERVICE_KEY }}"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "raw",
-        "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({fields: $json.data}) }}",
-        "options": {}
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input=$json; const fields=input.data&&typeof input.data==='object'?input.data:{}; const base={...input,retry_count:Number(input.retry_count||0)}; if(!Object.keys(fields).length)return {json:{...base,success:true,apply_skipped:true}}; try{const response=await helpers.httpRequest({method:'PATCH',url:$env.CRM_ADAPTER_URL+'/crm/update-enrichment/'+input.contact_id,headers:{'X-LeadFlow-Adapter-Key':$env.ADAPTER_SERVICE_KEY},body:{fields},json:true,timeout:Math.max(1,Number($env.ADAPTER_CALL_TIMEOUT_MS||30000)),returnFullResponse:true,ignoreHttpStatusErrors:true}); const status=Number(response.statusCode||0); const result=response.body&&typeof response.body==='object'?response.body:{}; const retries=base.retry_count+Number(result.retry_count||0); if(status>=200&&status<300&&result.success!==false)return {json:{...base,success:true,retry_count:retries}}; const original=Number(result.http_status||status||0); const allowed=new Set(['validation_error','authentication_error','rate_limit','timeout','upstream_error']); return {json:{...base,success:false,stage:'enrichment',error_type:allowed.has(result.error_type)?result.error_type:'upstream_error',error_code:typeof result.error_code==='string'&&/^[a-z0-9_]{1,100}$/.test(result.error_code)?result.error_code:(original?'http_'+original:'adapter_unavailable'),retry_count:retries}};}catch(error){const timeout=error&&(/timeout/i.test(String(error.name||''))||/timeout/i.test(String(error.message||''))); return {json:{...base,success:false,stage:'enrichment',error_type:timeout?'timeout':'upstream_error',error_code:timeout?'timeout':'adapter_unavailable'}};}"
       }
+    },
+    {
+      "id": "apply-created-ok",
+      "name": "Created Enrichment Applied",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1200,-200],
+      "parameters": {"conditions":{"options":{"caseSensitive":true,"typeValidation":"strict","version":2},"conditions":[{"id":"apply-created-ok-condition","leftValue":"={{ $json.success }}","rightValue":true,"operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}}
+    },
+    {
+      "id": "apply-updated-ok",
+      "name": "Updated Enrichment Applied",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1200,-400],
+      "parameters": {"conditions":{"options":{"caseSensitive":true,"typeValidation":"strict","version":2},"conditions":[{"id":"apply-updated-ok-condition","leftValue":"={{ $json.success }}","rightValue":true,"operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}}
     },
     {
       "id": "persist-created",
@@ -382,7 +370,7 @@
         "options": {
           "queryBatching": "single",
           "connectionTimeout": 3,
-          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $('Enrich Created Contact').item.json.crm_action, $('Enrich Created Contact').item.json.contact_id, $('Enrich Created Contact').item.json.retry_count, true, null, null] }}"
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $json.crm_action, $json.contact_id, $json.retry_count, true, null, null] }}"
         }
       },
       "credentials": {
@@ -407,7 +395,7 @@
         "options": {
           "queryBatching": "single",
           "connectionTimeout": 3,
-          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $('Enrich Updated Contact').item.json.crm_action, $('Enrich Updated Contact').item.json.contact_id, $('Enrich Updated Contact').item.json.retry_count, true, null, null] }}"
+          "queryReplacement": "={{ [$('Authenticate Validate Normalize').item.json.execution_id, $json.crm_action, $json.contact_id, $json.retry_count, true, null, null] }}"
         }
       },
       "credentials": {
@@ -1067,7 +1055,7 @@
       "main": [
         [
           {
-            "node": "Persist Created Success",
+            "node": "Created Enrichment Applied",
             "type": "main",
             "index": 0
           }
@@ -1078,13 +1066,15 @@
       "main": [
         [
           {
-            "node": "Persist Updated Success",
+            "node": "Updated Enrichment Applied",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
+    "Created Enrichment Applied": {"main":[[{"node":"Persist Created Success","type":"main","index":0}],[{"node":"Persist Created Enrichment Failure","type":"main","index":0}]]},
+    "Updated Enrichment Applied": {"main":[[{"node":"Persist Updated Success","type":"main","index":0}],[{"node":"Persist Updated Enrichment Failure","type":"main","index":0}]]},
     "Persist Created Success": {
       "main": [
         [

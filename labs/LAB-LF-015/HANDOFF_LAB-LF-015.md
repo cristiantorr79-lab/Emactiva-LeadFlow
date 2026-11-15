@@ -508,3 +508,55 @@ Siguiente paso:
 - PASS SYSTEM: Gateway focalizado 7/7; contrato CORS Bridge 1/1; compilación Python PASS. Se cubrieron preflight 204 completo, propagación bidireccional, origin 403 sin CORS, método/header no permitido sin autorización, OPTIONS sin consumo de cuota, header arbitrario eliminado, abuse token no suplantable y POST/429 sin regresión. Los servidores de prueba se cerraron mediante cleanup de `unittest`; no se crearon recursos Docker.
 - NOT_VERIFIED ENVIRONMENT: imagen Rate Gate reconstruida, recreación del servicio y repetición externa del preflight real. LF015-T03 y LAB-LF-015 permanecen abiertos.
 - Redespliegue mínimo: capturar IDs actuales de Caddy y rate-gate y el nombre del volumen de certificados; transferir solo `gateway/rate_gate.py`; etiquetar la imagen anterior para rollback; reconstruir `leadflow-web-gateway-rate-gate:python-3.14.3` con `gateway/Dockerfile.rate-gate`; ejecutar `web_gateway_with_secrets.py preflight` con el mapa privado; ejecutar `web_gateway_with_secrets.py start`. Compose debe conservar Caddy/volúmenes/redes y recrear únicamente rate-gate por cambio de imagen. Exigir mismo ID Caddy, nuevo ID rate-gate, cero puertos nuevos y health/log sanitizado. Repetir una sola vez OPTIONS externo y exigir 204 más Origin/Methods/Headers/Vary. Ante fallo, restaurar la etiqueta anterior y repetir start; no ejecutar `down`, `down -v` ni tocar Core/Bridge.
+### LF015-T03 — Interrupción CRM → Enrichment (2026-11-14)
+
+- **FAIL ENVIRONMENT:** la ejecución sintética `lf_exec_11419e2a4d094c319b427acd07865630` quedó en `processing / crm_interaction` después de confirmar contacto e interacción en CRM; `enrichment_status=not_started`, sin error terminal y con contexto de recuperación conservado. La ejecución productiva permanece intacta.
+- **Evidencia SYSTEM:** `workflows/leadflow_core_initial.json` coincide con el commit desplegado `e50216ef0e3444ea6b0291c847901a9d7121a193` en la ruta `Persist Interaction Outcome → Interaction Succeeded → Enrich Created Contact`. El checkpoint PostgreSQL precede al IF; la evaluación posterior usa item linking hacia `CRM Interaction`, y `Enrich Created Contact` resuelve referencias antes de su `try/catch`. Esto delimita el punto de fallo posible, pero no demuestra por sí solo la causa.
+- **NOT_VERIFIED:** causa raíz y clasificación definitiva SYSTEM/HYBRID/ENVIRONMENT. La única reproducción integrada local autorizada terminó antes de crear recursos con `command_failed:docker:1`; no se aplicó una corrección especulativa.
+- **Cleanup:** no se crearon contenedores, redes, volúmenes ni temporales QA; el fallo ocurrió en el primer inventario Docker. No se modificó el estado productivo.
+- **Siguiente gate:** con Docker local disponible, ejecutar una sola vez `python scripts/test/run_lf015_core_qa.py` sobre n8n 2.28.6. Si reproduce el bloqueo, capturar únicamente fase/nodo/error sanitizado antes del cleanup y comprobar item linking en `Interaction Succeeded` y las referencias previas al `try/catch` de `Enrich Created Contact`. Si no lo reproduce, comparar la revisión activa del workflow de n8n con el JSON versionado y obtener el error de ejecución mediante una ventana diagnóstica controlada, sin reenviar ni recuperar la ejecución original.
+
+#### Gate terminal ampliado del runner QA
+
+- **PASS SYSTEM:** `run_lf015_core_qa.py` ahora espera hasta 20 segundos y exige exactamente dos originales `success`, dos enriquecimientos `success`, dos interacciones confirmadas, un `duplicate`, cero `processing/retrying`, cero contextos residuales asociados a éxitos y las cardinalidades ya verificadas. El acceso a `recovery_contexts` usa el rol bootstrap porque el contrato revoca esa tabla al rol app. Ante divergencia solo expone conteos y `status:stage:error_code` sanitizados.
+- **PASS focalizado:** `test_lf015_core_qa_runner.py` 2/2 y compilación Python. **NOT_VERIFIED reproducción:** el único intento terminó en el inventario inicial con `command_failed:docker:1` desde Codex; no se crearon recursos y no se volvió a intentar el motor. La causa productiva continúa NOT_VERIFIED y no se modificó el workflow.
+- **Ejecución pendiente en PowerShell Windows:** desde la raíz limpia del repositorio, con los seis contenedores principales saludables, ejecutar una sola vez `python scripts/test/run_lf015_core_qa.py`. Conservar únicamente la línea sanitizada `core_qa status=...` y la línea de cleanup; detener cualquier acción posterior si cleanup o `main_unchanged` no es PASS.
+
+#### Remediación terminal de CRM enrichment
+
+- **Evidencia:** el QA ampliado previo cerró PASS (`success_2|enriched_2|interaction_2|duplicate_1|pending_0|contexts_0`, cleanup y principal intacto). En producción, después del checkpoint de interacción se observaron Adapter HTTP 200, HTTP 200 y HTTP 502; `PATCH /crm/update-enrichment/{contact_id}` era la única ruta explícita 502 y los nodos `Apply Enrichment Created/Updated` no capturaban el error. Esto demuestra el defecto SYSTEM de terminalización; el status original y la causa concreta del rechazo HubSpot/Hunter permanecen **NOT_VERIFIED ENVIRONMENT**.
+- **Corrección SYSTEM:** el Adapter omite PATCH cuando no existen campos enriquecibles, reintenta actualizaciones transitorias mediante el mecanismo vigente y registra solo metadatos allowlisted. El workflow aplica el PATCH desde nodos Code con respuesta completa, captura HTTP/timeout, conserva contexto y contador, y deriva mediante IF a `record_enrichment_outcome` de éxito o fallo para Created y Updated. No repite CREATE ni interacción y no agrega estados ni migraciones.
+- **PASS focalizado:** contrato Adapter 48/48 (incluye campos válidos, no-op vacío, HTTP 502 y timeout); workflow/runner 4/4; compilación Python y parseo JSON PASS. Los logs de prueba contienen únicamente operation/stage/error_type/error_code/http_status/retry_count. No se usó Docker desde Codex ni se crearon recursos.
+- **NOT_VERIFIED integrado:** el runner aislado ahora añade un rechazo sintético de `update_enrichment`, exige una ejecución terminal `failed/enrichment`, tres interacciones confirmadas, cero pendientes/contextos, mantiene dos éxitos y un duplicado, y conserva cleanup/main. Ejecutar una sola vez en PowerShell: `python scripts/test/run_lf015_core_qa.py`. No desplegar si `core_qa status`, `cleanup` o `main_unchanged` no son PASS.
+- **Intervención posterior propuesta:** tras PASS integrado, desplegar únicamente `adapters/server.py` y `workflows/leadflow_core_initial.json`, verificar hashes y publicar la revisión del workflow. Antes de recuperar la ejecución original, reconciliar contacto e interacción con el mecanismo oficial y continuar desde el checkpoint; no reenviar el formulario ni repetir operaciones ambiguas. LF015-T03 y LAB-LF-015 permanecen abiertos.
+
+### LF015-T03 - Integrated remediation validation
+
+Date: 2026-11-14
+
+- SYSTEM remediation: PASS in isolated QA.
+- HTTP results: 202,202,202,503.
+- Success: 2.
+- Enrichment success: 2.
+- Confirmed interactions: 3.
+- Controlled enrichment apply failure: 1.
+- Duplicate: 1.
+- Pending executions: 0.
+- Residual recovery contexts for successful executions: 0.
+- CRM contacts: 1.
+- CRM interactions: 3.
+- Idempotency: PASS.
+- Real external effects: 0.
+- QA cleanup: PASS.
+- Main environment unchanged: PASS.
+- QA HTTP expectation corrected to 503 according to
+  the existing Web Bridge contract.
+- git diff --check: PASS.
+
+Original upstream rejection cause: NOT_VERIFIED.
+Production deployment and validation: PENDING.
+Original production execution preserved.
+LAB-LF-015 remains OPEN.
+
+Next: authorized Git commit/push, selective deployment,
+controlled production validation and safe recovery.

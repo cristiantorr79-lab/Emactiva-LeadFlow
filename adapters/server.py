@@ -351,6 +351,15 @@ def crm_update(contact_id,fields,enrichment=False):
   suffix="/enrichment" if enrichment else ""; return call("PATCH",CONFIG["crm"]+f"/crm/contacts/{contact_id}{suffix}",{"fields":fields})
  return call("PATCH",CONFIG["crm"]+f"/crm/v3/objects/contacts/{contact_id}",{"properties":hubspot_properties(fields)},hubspot_headers())
 
+def apply_enrichment(contact_id,raw_fields):
+ fields=filter_enrichment_fields(raw_fields)
+ if not fields: return 200,{"success":True,"contact_id":contact_id,"applied":False,"retry_count":0}
+ status,headers,_,retries=request_with_retry("PATCH","","",{},operation=lambda:crm_update(contact_id,fields,True))
+ if 200<=status<300: return 200,{"success":True,"contact_id":contact_id,"applied":True,"retry_count":retries}
+ result=failure("enrichment",status,retries,headers,contact_id=contact_id)
+ LOGGER.emit("WARNING","crm_enrichment_update_failed",operation="crm.update_enrichment",stage="enrichment",error_type=result["error_type"],error_code=result["error_code"],http_status=result["http_status"],retry_count=retries)
+ return 502,result
+
 def hunter_data(body):
  data=body.get("data") if isinstance(body,dict) else None
  if not isinstance(data,dict): return None
@@ -533,9 +542,8 @@ class Handler(BaseHTTPRequestHandler):
   if payload is None: return self.respond(400,{"error":canonical_error(400)})
   contact_id=opaque_id(self.path[len(prefix):])
   if not contact_id: return self.respond(400,{"error":canonical_error(400,"invalid_contact_id")})
-  fields=filter_enrichment_fields(payload.get("fields"))
-  status,_,body=crm_update(contact_id,fields,True)
-  self.respond(200,{"contact_id":body.get("contact_id",contact_id)}) if 200<=status<300 else self.respond(502,{"error":canonical_error(status)})
+  status,result=apply_enrichment(contact_id,payload.get("fields"))
+  self.respond(status,result)
 
 if __name__=="__main__":
  CONFIG=load_config()
