@@ -1,6 +1,6 @@
 """Focused synthetic tests for LF015; no Docker or Google Cloud operations."""
 from __future__ import annotations
-import importlib.util,io,json,os,shutil,subprocess,sys,tarfile,tempfile,unittest
+import contextlib,hashlib,importlib.util,io,json,os,shutil,subprocess,sys,tarfile,tempfile,unittest
 from datetime import datetime,timedelta,timezone
 from unittest import mock
 from pathlib import Path
@@ -101,16 +101,66 @@ class RestorePreflightTests(unittest.TestCase):
   restore={"services":{"postgres":{"ports":[],"networks":{"restore_net":{}},"volumes":[{"source":"restore_pg","target":"/var/lib/postgresql/data"}]},"n8n":{"ports":[],"networks":{"restore_net":{}},"volumes":[{"source":"restore_n8n","target":"/home/node/.n8n"}]}},"networks":{"restore_net":{"name":"restore_net","internal":True}},"volumes":{"restore_pg":{"name":"restore_pg"},"restore_n8n":{"name":"restore_n8n"}}}
   return source,restore
  def test_isolated_configs_pass(self):
-  module=self.module(); source,restore=self.configs(); self.assertEqual(module.validate_compose(source,restore),[]); self.assertTrue(module.validate_projects("lf015-qa","lf015-restore-run"))
+  module=self.module(); source,restore=self.configs(); self.assertEqual(module.validate_compose(source,restore,"synthetic_closed_set"),[]); self.assertTrue(module.validate_projects("lf015-qa","lf015-restore-run"))
   override=(ROOT/"labs"/"LAB-LF-015"/"restore-isolated.override.yaml").read_text(encoding="utf-8"); self.assertIn("ports: !reset []",override); self.assertIn("internal: true",override); self.assertNotIn("password",override.lower()); self.assertNotIn("C:\\",override)
  def test_same_project_shared_volume_and_published_port_fail(self):
   module=self.module(); source,restore=self.configs(); self.assertFalse(module.validate_projects("lf015-qa","lf015-qa"))
   restore["volumes"]["restore_pg"]["name"]="source_pg"; restore["networks"]["restore_net"]["name"]="source_net"; restore["services"]["n8n"]["ports"]=[{"published":5678,"target":5678}]
-  errors=module.validate_compose(source,restore); self.assertIn("shared_volumes",errors); self.assertIn("shared_networks",errors); self.assertIn("restore_ports",errors)
-  del restore["services"]["postgres"]; self.assertIn("restore_services",module.validate_compose(source,restore))
+  errors=module.validate_compose(source,restore,"synthetic_closed_set"); self.assertIn("shared_volumes",errors); self.assertIn("shared_networks",errors); self.assertIn("restore_ports",errors)
+  del restore["services"]["postgres"]; self.assertIn("restore_services",module.validate_compose(source,restore,"synthetic_closed_set"))
  def test_identity_configuration_and_missing_authority_fail(self):
   module=self.module(); identities=["backup@example.test","writer@example.test","admin@example.test","restore@example.test"]; self.assertTrue(module.validate_identities(identities)); self.assertFalse(module.validate_identities([identities[0]]*4))
   with self.assertRaises(Exception): module.authority_manifest("missing-authority.json")
+ def test_production_allows_non_internal_source_and_internal_destination(self):
+  module=self.module(); source,restore=self.configs(); source["networks"]["source_net"]["internal"]=False
+  self.assertEqual(module.validate_compose(source,restore,"production_prospective"),[])
+ def test_qa_rejects_non_internal_source(self):
+  module=self.module(); source,restore=self.configs(); source["networks"]["source_net"]["internal"]=False
+  self.assertIn("source_network",module.validate_compose(source,restore,"synthetic_closed_set"))
+ def test_production_rejects_non_internal_destination(self):
+  module=self.module(); source,restore=self.configs(); source["networks"]["source_net"]["internal"]=False; restore["networks"]["restore_net"]["internal"]=False
+  self.assertIn("restore_network",module.validate_compose(source,restore,"production_prospective"))
+ def test_production_rejects_destination_with_extra_external_network(self):
+  module=self.module(); source,restore=self.configs(); source["networks"]["source_net"]["internal"]=False; restore["networks"]["egress"]={"name":"restore_egress","internal":False}; restore["services"]["n8n"]["networks"]["egress"]={}
+  self.assertIn("restore_network",module.validate_compose(source,restore,"production_prospective"))
+ def test_published_port_is_rejected_in_source_or_destination(self):
+  module=self.module()
+  for label,service in (("source","postgres"),("source","n8n"),("restore","postgres"),("restore","n8n")):
+   with self.subTest(label=label,service=service):
+    source,restore=self.configs(); target=source if label=="source" else restore; target["services"][service]["ports"]=[{"published":5432,"target":5432}]
+    self.assertIn(label+"_ports",module.validate_compose(source,restore,"production_prospective"))
+ def test_missing_common_network_is_rejected(self):
+  module=self.module(); source,restore=self.configs(); source["networks"]["source_other"]={"name":"source_other","internal":True}; source["services"]["n8n"]["networks"]={"source_other":{}}
+  self.assertIn("source_network",module.validate_compose(source,restore,"production_prospective"))
+ def test_referenced_network_must_exist(self):
+  module=self.module(); source,restore=self.configs(); restore["services"]["n8n"]["networks"]["missing"]={}
+  self.assertIn("restore_network",module.validate_compose(source,restore,"production_prospective"))
+ def test_invalid_or_missing_mode_is_rejected(self):
+  module=self.module(); source,restore=self.configs()
+  for mode in ("","production","unknown",None):
+   with self.subTest(mode=mode): self.assertEqual(module.validate_compose(source,restore,mode),["authority_mode"])
+ def test_authority_scope_must_match_mode(self):
+  module=self.module()
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary); ids=[]; digest=hashlib.sha256((json.dumps(ids,sort_keys=True,separators=(",",":"))+"\n").encode()).hexdigest()
+   qa={"version":"LF015-DSR-AUTHORITY-1","authority_export_id":"qa-export","coverage_started_at_utc":"2025-01-01T00:00:00Z","covered_through_utc":"2025-01-02T00:00:00Z","complete_through_sequence":0,"event_count":0,"evidence_ids":ids,"evidence_ids_sha256":digest}
+   production={**qa,"version":"LF015-DSR-AUTHORITY-2","authority_export_id":"production-export","scope":"production_prospective","source_system_id":"production-admin","baseline_attestation_sha256":"a"*64}
+   qa_path=root/"qa.json"; prod_path=root/"production.json"; qa_path.write_text(json.dumps(qa),encoding="utf-8"); prod_path.write_text(json.dumps(production),encoding="utf-8")
+   self.assertTrue(module.authority_scope_matches("synthetic_closed_set",qa_path)); self.assertTrue(module.authority_scope_matches("production_prospective",prod_path))
+   self.assertFalse(module.authority_scope_matches("production_prospective",qa_path)); self.assertFalse(module.authority_scope_matches("synthetic_closed_set",prod_path))
+ def test_productive_equivalent_preflight_has_only_runtime_not_verified(self):
+  module=self.module(); source,restore=self.configs(); source["networks"]["source_net"]["internal"]=False
+  with tempfile.TemporaryDirectory() as temporary:
+   root=Path(temporary); override1=root/"production.yaml"; override2=root/"restore.yaml"; override1.write_text("services: {}\n"); override2.write_text("services: {}\n")
+   key1=root/"backup.key"; key2=root/"dsr.key"; key1.write_text("a"); key2.write_text("b"); state=root/"state"; state.mkdir()
+   backup=root/"backup.json"; backup.write_text(json.dumps({"created_utc":"20250101T120000Z"}))
+   baseline={"version":"LF015-DSR-PRODUCTION-BASELINE-1","environment":"production","source_system_id":"production-admin","observed_at_utc":"2025-01-01T00:00:00Z","dsr_request_count":0,"tombstone_count":0,"outbox_pending_count":0,"provider_action_pending_count":0}
+   export={"version":"LF015-DSR-ADMIN-EXPORT-2","scope":"production_prospective","source_system_id":"production-admin","authority_export_id":"production-export","coverage_started_at_utc":"2025-01-01T00:00:00Z","covered_through_utc":"2025-01-02T00:00:00Z","complete_through_sequence":0,"events":[],"baseline_attestation":baseline}
+   export_path=root/"export.json"; export_path.write_text(json.dumps(export)); dsr_spec=importlib.util.spec_from_file_location("dsr_for_preflight",ROOT/"scripts"/"backup"/"dsr_restore_evidence.py"); dsr=importlib.util.module_from_spec(dsr_spec); dsr_spec.loader.exec_module(dsr); manifest=root/"authority.json"; manifest.write_bytes(dsr.canonical(dsr.authority_from_export(export_path,backup)))
+   environment={"SOURCE_COMPOSE_PROJECT":"emactiva-leadflow","RESTORE_COMPOSE_PROJECT":"lf015-production-restore","BACKUP_COMPOSE_OVERRIDE":str(override1.resolve()),"RESTORE_COMPOSE_OVERRIDE":str(override2.resolve()),"RESTORE_STATE_DIR":str(state.resolve()),"BACKUP_KEY_FILE":str(key1.resolve()),"DSR_EVIDENCE_KEY_FILE":str(key2.resolve()),"BACKUP_GCP_IDENTITY":"backup@example.test","DSR_EVIDENCE_WRITER_IDENTITY":"writer@example.test","DSR_EVIDENCE_ADMIN_IDENTITY":"admin@example.test","RESTORE_GCP_IDENTITY":"restore@example.test","RESTORE_GCS_URI":"gs://backup/object.tar.gcm","DSR_EVIDENCE_URI":"gs://dsr/object.dsr-bundle.gcm","DSR_AUTHORITY_MANIFEST":str(manifest),"DSR_AUTHORITY_EXPORT":str(export_path),"DSR_BACKUP_MANIFEST":str(backup),"LF015_DSR_AUTHORITY_MODE":"production_prospective"}
+   output=io.StringIO()
+   with mock.patch.dict(os.environ,environment,clear=True),mock.patch.object(module.shutil,"which",return_value="/synthetic/tool"),mock.patch.object(module,"secure_file",return_value=True),mock.patch.object(module,"secure_dir",return_value=True),mock.patch.object(module,"load_compose",side_effect=[source,restore]),contextlib.redirect_stdout(output): code=module.main()
+   self.assertEqual(code,2); self.assertNotIn("status=FAIL",output.getvalue()); self.assertIn("control=compose_isolation status=PASS",output.getvalue()); self.assertIn("control=iam_gcs_runtime status=NOT_VERIFIED",output.getvalue())
 
 class DsrQaAuthorityTests(unittest.TestCase):
  def modules(self):

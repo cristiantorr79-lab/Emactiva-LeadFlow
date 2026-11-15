@@ -828,3 +828,12 @@ docker logs --since 10m "$ADAPTER_ID" 2>&1 | python3 -c "import re,sys; s=sys.st
 ```
 
 PASS requiere `slack_gate_http=200 delivered=True`, una alerta visual técnica sin PII y `sensitive_hits=0`. Ante fallo, conservar evidencia sanitizada, restaurar la etiqueta rollback como `leadflow-adapters:python-3.14.3` y repetir únicamente el `up --no-deps adapters` mediante el mismo entorno en memoria. No recrear Core, n8n, PostgreSQL, Gateway ni Bridge.
+
+### C4.1.3 — Corrección focalizada del preflight de restauración productiva
+
+- **FAIL ENVIRONMENT observado:** el preflight productivo retornó RC=1 exclusivamente por `compose_isolation`; el diagnóstico oficial delimitó `ISOLATION_ERRORS=['source_network']`. El origen `emactiva-leadflow` usa su red común `default` no interna, mientras el destino `lf015-production-restore` usa exclusivamente `lf015_restore_internal` interna.
+- **Causa SYSTEM:** `validate_compose` imponía redes internas a origen y destino sin distinguir `production_prospective` de `synthetic_closed_set`. El requisito QA cerrado era incompatible con la conectividad legítima del origen productivo.
+- **Corrección:** `LF015_DSR_AUTHORITY_MODE` es ahora selector obligatorio de `validate_compose`. Producción permite redes no internas solo en el origen; QA conserva origen y destino internos. Ambos modos siguen exigiendo servicios PostgreSQL/n8n, red común existente, cero puertos publicados, destino íntegramente interno y separación de redes/volúmenes. Modo ausente/desconocido y scope DSR cruzado fallan cerrado.
+- **PASS SYSTEM:** `python -m unittest scripts.test.test_lf015_backup.RestorePreflightTests` = 13/13; compilación Python PASS. Incluye el modelo productivo reportado y confirma RC=2 sin FAIL, exclusivamente por `iam_gcs_runtime=NOT_VERIFIED`.
+- **NOT_VERIFIED ENVIRONMENT:** C4 no está aprobado hasta sincronizar esta corrección y repetir únicamente el preflight productivo en la VM. No se ejecutaron Docker, GCP, restore ni cambios de red.
+- **Siguiente paso:** transferir/verificar `scripts/backup/preflight_restore.py`, ejecutar una vez el mismo preflight productivo y detenerse si aparece cualquier FAIL; solo RC=2 limitado al gate IAM/GCS ya acreditable permite continuar con la restauración aislada autorizada.

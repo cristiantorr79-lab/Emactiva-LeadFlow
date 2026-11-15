@@ -13,20 +13,24 @@ IDENTITY=re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$")
 GCS=re.compile(r"^gs://[^/]+/.+$")
 HEX64=re.compile(r"^[0-9a-f]{64}$"); TECH=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
 AUTHORITY_KEYS={"version","authority_export_id","coverage_started_at_utc","covered_through_utc","complete_through_sequence","event_count","evidence_ids","evidence_ids_sha256"}
+AUTHORITY_SCOPES={"synthetic_closed_set":"synthetic_qa_closed_set","production_prospective":"production_prospective"}
 
 def validate_projects(source,restore): return bool(PROJECT.fullmatch(source) and PROJECT.fullmatch(restore) and source!=restore)
 def validate_identities(values): return len(set(values))==4 and all(IDENTITY.fullmatch(value) for value in values)
 def volume_names(config): return {value.get("name",key) for key,value in config.get("volumes",{}).items() if isinstance(value,dict)}
 def network_names(config): return {value.get("name",key) for key,value in config.get("networks",{}).items() if isinstance(value,dict)}
-def validate_compose(source,destination):
+def validate_compose(source,destination,mode):
  errors=[]
+ if mode not in AUTHORITY_SCOPES: return ["authority_mode"]
  for label,config in (("source",source),("restore",destination)):
   services=config.get("services",{}); networks=config.get("networks",{})
   if not {"postgres","n8n"}.issubset(services): errors.append(f"{label}_services")
   else:
    if services["postgres"].get("ports") or services["n8n"].get("ports"): errors.append(f"{label}_ports")
    postgres=set(services["postgres"].get("networks",{})); n8n=set(services["n8n"].get("networks",{})); used=postgres|n8n
-   if not postgres&n8n or any(networks.get(name,{}).get("internal") is not True for name in used): errors.append(f"{label}_network")
+   missing=used-set(networks)
+   require_internal=label=="restore" or mode=="synthetic_closed_set"
+   if not postgres&n8n or missing or (require_internal and any(networks[name].get("internal") is not True for name in used)): errors.append(f"{label}_network")
  if volume_names(source)&volume_names(destination): errors.append("shared_volumes")
  if network_names(source)&network_names(destination): errors.append("shared_networks")
  return errors
@@ -54,6 +58,9 @@ def authority_manifest(path):
 def authority_matches_export(export_path,manifest_path,backup_manifest):
  try: return authority_from_export(Path(export_path),Path(backup_manifest))==authority_manifest(manifest_path)
  except Exception: return False
+def authority_scope_matches(mode,manifest_path):
+ try: return authority_manifest(manifest_path).get("scope","synthetic_qa_closed_set")==AUTHORITY_SCOPES[mode]
+ except Exception: return False
 
 def main():
  root=Path(__file__).resolve().parents[2]; results=[]
@@ -61,6 +68,7 @@ def main():
  tools=("docker","python3","node","sha256sum","curl","gcloud")
  if all(shutil.which(tool) for tool in tools): record("tools","PASS")
  else: record("tools","FAIL")
+ mode=os.environ.get("LF015_DSR_AUTHORITY_MODE","")
  source=os.environ.get("SOURCE_COMPOSE_PROJECT",""); restore=os.environ.get("RESTORE_COMPOSE_PROJECT","")
  if validate_projects(source,restore): record("projects","PASS")
  else: record("projects","FAIL")
@@ -69,7 +77,7 @@ def main():
  else: record("compose_files","FAIL")
  if not any(status=="FAIL" for _,status in results):
   try:
-   errors=validate_compose(load_compose(root,source,source_override),load_compose(root,restore,restore_override)); record("compose_isolation","PASS" if not errors else "FAIL")
+   errors=validate_compose(load_compose(root,source,source_override),load_compose(root,restore,restore_override),mode); record("compose_isolation","PASS" if not errors else "FAIL")
   except Exception: record("compose_isolation","FAIL")
  state=os.environ.get("RESTORE_STATE_DIR","")
  record("state_directory","PASS" if secure_dir(state) else "FAIL")
@@ -85,13 +93,8 @@ def main():
   if not independent or not authority_matches_export(export_path,manifest,backup_path): raise ValueError("authority mismatch")
   record("authority_structure","PASS")
  except Exception: record("authority_structure","FAIL")
- mode=os.environ.get("LF015_DSR_AUTHORITY_MODE","")
- try:
-  actual=authority_manifest(manifest).get("scope","synthetic_qa_closed_set")
-  expected={"synthetic_closed_set":"synthetic_qa_closed_set","production_prospective":"production_prospective"}.get(mode)
-  if not expected or actual!=expected: raise ValueError("authority scope mismatch")
-  record("authority_scope","PASS" if actual=="production_prospective" else "WARN")
- except Exception: record("authority_scope","FAIL")
+ if authority_scope_matches(mode,manifest): record("authority_scope","PASS" if mode=="production_prospective" else "WARN")
+ else: record("authority_scope","FAIL")
  record("iam_gcs_runtime","NOT_VERIFIED")
  if any(status=="FAIL" for _,status in results): return 1
  if any(status=="NOT_VERIFIED" for _,status in results): return 2
