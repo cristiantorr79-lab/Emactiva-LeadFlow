@@ -94,9 +94,7 @@ class BridgeConfig:
         interests = frozenset(item.strip() for item in values.get("LEADFLOW_ALLOWED_INTERESTS", "").split(",") if item.strip())
         if not interests or any(len(item) > 100 for item in interests):
             raise BridgeError(500, "configuration_interests")
-        origins = frozenset(item.strip() for item in values.get("WEB_BRIDGE_ALLOWED_ORIGINS", "").split(",") if item.strip())
-        if any(not _valid_origin(item, environment) for item in origins):
-            raise BridgeError(500, "configuration_origin")
+        origins = _parse_origins(values.get("WEB_BRIDGE_ALLOWED_ORIGINS", ""), environment)
         abuse_mode = values.get("WEB_BRIDGE_ABUSE_CONTROL", "disabled").strip().lower()
         abuse_token = values.get("WEB_BRIDGE_ABUSE_TOKEN", "")
         if environment in SECURE_ENVIRONMENTS:
@@ -108,7 +106,8 @@ class BridgeConfig:
             raise BridgeError(500, "configuration_secret_reuse")
         turnstile_mode = values.get("WEB_BRIDGE_TURNSTILE_MODE", "disabled").strip().lower()
         turnstile_secret = values.get("WEB_BRIDGE_TURNSTILE_SECRET_KEY", "")
-        turnstile_hostnames = frozenset(item.strip().lower() for item in values.get("WEB_BRIDGE_TURNSTILE_HOSTNAMES", "").split(",") if item.strip())
+        raw_turnstile_hostnames = values.get("WEB_BRIDGE_TURNSTILE_HOSTNAMES", "")
+        turnstile_hostnames = _parse_hostnames(raw_turnstile_hostnames) if raw_turnstile_hostnames else frozenset()
         turnstile_action = values.get("WEB_BRIDGE_TURNSTILE_ACTION", "").strip()
         turnstile_proxy = values.get("WEB_BRIDGE_TURNSTILE_PROXY_URL", "").strip()
         proxy_host = ""
@@ -129,6 +128,8 @@ class BridgeConfig:
                 raise BridgeError(500, "configuration_turnstile")
             if any(not _valid_hostname(item) for item in turnstile_hostnames):
                 raise BridgeError(500, "configuration_turnstile_hostname")
+            if environment in SECURE_ENVIRONMENTS and any(urlsplit(origin).hostname not in turnstile_hostnames for origin in origins):
+                raise BridgeError(500, "configuration_turnstile_hostname")
             if turnstile_action and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", turnstile_action):
                 raise BridgeError(500, "configuration_turnstile_action")
             if any(hmac.compare_digest(turnstile_secret, secret) for secret in (webhook_key, event_id_key, abuse_token) if secret):
@@ -139,10 +140,33 @@ class BridgeConfig:
 
 
 def _valid_origin(value: str, environment: str) -> bool:
-    parsed = urlsplit(value)
-    if parsed.scheme not in ({"https"} if environment in SECURE_ENVIRONMENTS else {"http", "https"}):
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
         return False
-    return bool(parsed.hostname and not parsed.username and not parsed.password and not parsed.path.strip("/") and not parsed.query and not parsed.fragment)
+    schemes = {"https"} if environment in SECURE_ENVIRONMENTS else {"http", "https"}
+    host = parsed.hostname
+    if (
+        parsed.scheme not in schemes or not host or host != host.lower()
+        or parsed.username is not None or parsed.password is not None
+        or parsed.path or parsed.query or parsed.fragment or "*" in value
+        or (port is not None and (not 1 <= port <= 65535 or parsed.scheme == "https" and port == 443 or parsed.scheme == "http" and port == 80))
+        or not (_valid_hostname(host) or environment == "development" and host == "localhost")
+    ):
+        return False
+    authority = host if port is None else f"{host}:{port}"
+    return value == f"{parsed.scheme}://{authority}"
+
+
+def _parse_origins(raw: str, environment: str) -> frozenset[str]:
+    items = raw.split(",")
+    if not raw or any(not item or item != item.strip() for item in items) or len(items) != len(set(items)):
+        raise BridgeError(500, "configuration_origin")
+    origins = frozenset(items)
+    if any(not _valid_origin(item, environment) for item in origins):
+        raise BridgeError(500, "configuration_origin")
+    return origins
 
 
 def _valid_hostname(value: str) -> bool:
@@ -150,6 +174,16 @@ def _valid_hostname(value: str) -> bool:
         return False
     labels = value.split(".")
     return len(labels) >= 2 and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)
+
+
+def _parse_hostnames(raw: str) -> frozenset[str]:
+    items = raw.split(",")
+    if not raw or any(not item or item != item.strip() for item in items) or len(items) != len(set(items)):
+        raise BridgeError(500, "configuration_turnstile_hostname")
+    hostnames = frozenset(items)
+    if any(not _valid_hostname(item) for item in hostnames):
+        raise BridgeError(500, "configuration_turnstile_hostname")
+    return hostnames
 
 
 def _load_unique_json(raw: bytes):

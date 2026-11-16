@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse, importlib.util, ipaddress, json, os, re, subprocess, sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT=Path(__file__).resolve().parents[2]
 COMPOSE_FILE=ROOT/"compose.web-gateway.production.yaml"
@@ -18,6 +19,21 @@ REQUIRED_NONSECRETS={"WEB_GATEWAY_BIND_ADDRESS","WEB_GATEWAY_PUBLIC_IP","WEB_GAT
 OPERATION_ENV={"PATH","HOME","USERPROFILE","SYSTEMROOT","WINDIR","DOCKER_HOST","DOCKER_CONTEXT","DOCKER_CONFIG","XDG_CONFIG_HOME","TMPDIR","TEMP","TMP"}
 
 class WebGatewaySecretError(RuntimeError): pass
+
+def valid_hostname(value):
+ labels=value.split(".")
+ return len(value)<=253 and not value.endswith(".") and len(labels)>=2 and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",label) for label in labels)
+
+def parse_origins(raw):
+ items=raw.split(",")
+ if not raw or any(not item or item!=item.strip() for item in items) or len(items)!=len(set(items)): raise WebGatewaySecretError("public contract invalid")
+ for item in items:
+  try: parsed=urlsplit(item); port=parsed.port
+  except ValueError as error: raise WebGatewaySecretError("public contract invalid") from error
+  host=parsed.hostname
+  authority=host if port is None else f"{host}:{port}"
+  if parsed.scheme!="https" or not host or host!=host.lower() or parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment or "*" in item or not valid_hostname(host) or (port is not None and (not 1<=port<=65535 or port==443)) or item!=f"https://{authority}": raise WebGatewaySecretError("public contract invalid")
+ return frozenset(items)
 
 def secure_runtime():
  path=ROOT/"scripts"/"admin"/"compose_with_secrets.py"
@@ -44,7 +60,8 @@ def resolve_environment(map_path, provider_factory=None):
  projects=[os.environ.get(name,"").strip() for name in ("WEB_GATEWAY_COMPOSE_PROJECT","WEB_BRIDGE_COMPOSE_PROJECT","LEADFLOW_COMPOSE_PROJECT")]
  if any(not PROJECT_RE.fullmatch(item) for item in projects) or len(set(projects))!=3: raise WebGatewaySecretError("compose project separation required")
  if any(not os.environ.get(name,"").strip() for name in REQUIRED_NONSECRETS): raise WebGatewaySecretError("nonsecret configuration incomplete")
- if os.environ["WEB_GATEWAY_PUBLIC_PATH"]!="/lead" or os.environ["WEB_GATEWAY_ALLOWED_ORIGINS"]!="https://emactivaspa.lovable.app" or os.environ["WEB_GATEWAY_UPSTREAM_URL"]!="http://web-bridge:8080/lead": raise WebGatewaySecretError("public contract invalid")
+ if os.environ["WEB_GATEWAY_PUBLIC_PATH"]!="/lead" or os.environ["WEB_GATEWAY_UPSTREAM_URL"]!="http://web-bridge:8080/lead": raise WebGatewaySecretError("public contract invalid")
+ parse_origins(os.environ["WEB_GATEWAY_ALLOWED_ORIGINS"])
  try:
   public_ip=ipaddress.ip_address(os.environ["WEB_GATEWAY_PUBLIC_IP"]); bind_ip=ipaddress.ip_address(os.environ["WEB_GATEWAY_BIND_ADDRESS"])
  except ValueError as error: raise WebGatewaySecretError("public address invalid") from error

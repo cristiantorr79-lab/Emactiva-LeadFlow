@@ -61,6 +61,55 @@ docker compose up -d postgres
 bash scripts/database/apply_migrations.sh
 ```
 
+### Aprovisionamiento n8n en Linux
+
+Producción no usa `.env` ni el archivo temporal de PowerShell. `scripts/n8n/provision_n8n.py` reutiliza `LF015-SECRET-MAP-2` y `GcpSecretManagerProvider`: valida la identidad administrada y resuelve en memoria la contraseña del rol PostgreSQL app junto con el entorno runtime. Exige `LEADFLOW_COMPOSE_PROJECT` explícito y usa siempre `compose.yaml` + `compose.production.yaml` con `--project-name`.
+
+El preflight no importa ni publica. Requiere n8n ya iniciado, valida Compose, exporta el workflow para comparar `id/name/settings/nodes/connections` y usa la exportación individual documentada `export:credentials --id=leadflow-postgres --decrypted` para comparar exclusivamente esa credencial (`id/name/type/data`) con la configuración resuelta. Nunca ejecuta una exportación descifrada masiva. Los temporales se crean dentro del contenedor con `umask 077`, se fuerzan a `0600` y un `trap` instalado antes del primer `mktemp` los elimina incluso si falla una creación posterior; ningún secreto se devuelve al host. Una salida individual vacía acredita ausencia; errores, IDs distintos o formas múltiples/inválidas son ambiguos y bloquean. El estado se clasifica como ausente, equivalente, divergente o ambiguo. Equivalente no se reimporta; parcial importa solo lo ausente; divergente exige autorización específica y ambiguo bloquea:
+
+```bash
+export LEADFLOW_COMPOSE_PROJECT='<proyecto-core-aprobado>'
+export LEADFLOW_SECRET_MAP_FILE='/ruta/externa/lf015-runtime-map-v2.json'
+python3 scripts/n8n/provision_n8n.py preflight --map "$LEADFLOW_SECRET_MAP_FILE"
+# Solo para una divergencia conocida y aprobada (usar únicamente el flag necesario):
+python3 scripts/n8n/provision_n8n.py preflight --map "$LEADFLOW_SECRET_MAP_FILE" \
+  --authorize-replace-workflow --authorize-active-replacement
+```
+
+La ejecución requiere autorización de provisión; publicar es un gate independiente. La credencial JSON viaja por stdin, nunca por argumentos, stdout o archivo del host. Dentro del contenedor usa `umask 077`, se importa desde un temporal y se elimina aun ante fallo. La importación conserva los IDs estables `leadflow-postgres` y `leadflow-core-initial`; después se reconcilian contenido y actividad. Un workflow nuevo queda inactivo sin `--authorize-publish`. Un workflow activo equivalente permanece activo sin mutación. Reemplazar uno activo exige además `--authorize-active-replacement` y conserva su actividad. Ante retorno ambiguo de import/publish se inspecciona el estado antes de continuar; nunca se repite automáticamente la mutación.
+
+```bash
+# Importar credencial y workflow, sin publicar:
+python3 scripts/n8n/provision_n8n.py apply --map "$LEADFLOW_SECRET_MAP_FILE" --authorize-provision
+
+# Instalación/reconciliación aprobada con publicación explícita:
+python3 scripts/n8n/provision_n8n.py apply --map "$LEADFLOW_SECRET_MAP_FILE" \
+  --authorize-provision --authorize-replace-credential \
+  --authorize-replace-workflow --authorize-active-replacement --authorize-publish
+```
+
+El resultado solo informa fase, PASS/FAIL y `error_id` sanitizado. No ejecutar simultáneamente dos provisiones ni cambiar `N8N_ENCRYPTION_KEY`: la clave debe coincidir con el volumen existente. Esta ruta no sustituye bootstrap, roles o migraciones PostgreSQL.
+
+### Preparación productiva reproducible para M01
+
+Orden obligatorio y fail-closed:
+
+1. Fijar checkout/commit aprobado y verificar host Linux, espacio, hora, Docker Engine, plugin Compose y Python. Confirmar que los mapas externos existen con permisos `0600`; no mostrar Compose renderizado ni `docker inspect` de entornos.
+2. Definir proyectos Core, Bridge y Gateway distintos y nombres de redes externos aprobados. Rechazar recursos preexistentes cuyo label Compose no coincida; no reutilizar volúmenes entre proyectos.
+3. Verificar localmente las imágenes fijadas antes de mutar: `postgres:17.6-bookworm`, `n8nio/n8n:2.28.6`, `leadflow-adapters:python-3.14.3`, `leadflow-web-bridge:python-3.14.3`, `leadflow-web-gateway-rate-gate:python-3.14.3` y `caddy:2.11.3-alpine`. Una imagen ausente o con procedencia/digest no aprobado detiene; pull/build requiere una ventana de suministro separada.
+4. Ejecutar los preflight seguros de Core, Bridge y Gateway con sus mapas independientes. Confirmar separación de proyectos, redes esperadas, ausencia de puertos internos publicados y disponibilidad de las redes externas; ningún preflight ejecuta `up`.
+5. En instalación nueva, ejecutar el bootstrap PostgreSQL autorizado, sincronizar roles y aplicar migraciones antes del runtime. En volumen existente, omitir bootstrap y comprobar el ledger sin regenerar identidades.
+6. Iniciar Core mediante el cargador runtime; exigir healthchecks de PostgreSQL, n8n y Adapter. Ejecutar el preflight/provisionador Linux anterior. Solo después iniciar Bridge y Gateway mediante sus cargadores, manteniendo el orden interno→externo.
+7. Verificar IDs/labels, redes, volúmenes, health, workflow publicado cuando fue autorizado, cero puertos internos y únicamente 443 en la frontera. Ante fallo, detener el componente nuevo; no usar `down -v`, no borrar certificados ni recrear proyectos sanos.
+
+**Infraestructura comprobada en LAB-LF-015:** Compose separado para Core/Bridge/Gateway, identidad administrada y resolución Secret Manager, seis servicios productivos, red interna/externa configurada, HTTPS por 443, backup/restore aislado y controles de cleanup documentados. Esta evidencia pertenece al piloto observado y no acredita automáticamente otro cliente/host.
+
+**Mínimos ENVIRONMENT:** Linux compatible, Docker/Compose y Python disponibles; checkout/hash aprobado; imágenes/digests disponibles; disco y permisos del socket; identidad runtime con acceso mínimo a versiones concretas de secretos; mapas externos `0600`; redes/proyectos/volúmenes exclusivos; reloj/DNS/egress requeridos; PostgreSQL inicializado o clasificado inequívocamente; n8n sano con clave de cifrado estable; firewall/TLS y rollback autorizados. Todos deben verificarse en el destino.
+
+**Recomendaciones:** fijar digests además de tags, usuario operativo sin privilegios innecesarios, monitoreo de disco/certificado/health, ventana y snapshot previo, inventario firmado de imágenes y revisión periódica de IAM. No son sustitutos de los mínimos.
+
+**NOT_VERIFIED:** ejecución del nuevo provisionador en Linux/n8n real, comportamiento efectivo de la CLI 2.28.6 en ese host, reconciliación de una instalación parcial real, disponibilidad/digests de imágenes en un destino nuevo, permisos Docker/Secret Manager, redes y capacidad/egress de otro cliente. Estos puntos pasan al gate ENVIRONMENT de M01.
+
 En Windows se mantiene la ruta PowerShell existente. Cargar las variables de `.env` en la sesión y ejecutar:
 
 ```powershell

@@ -131,6 +131,20 @@ class WebGatewayTests(unittest.TestCase):
             with self.subTest(missing=missing), self.assertRaises(self.module.GateError):
                 self.module.GateConfig.from_env({name: value for name, value in base.items() if name != missing})
 
+    def test_multiple_canonical_origins_and_invalid_forms(self):
+        base = {
+            "WEB_GATEWAY_POLICY_PORT": "8081", "WEB_GATEWAY_PUBLIC_PATH": "/lead",
+            "WEB_GATEWAY_ALLOWED_ORIGINS": "https://cliente.cl,https://form.example:8443",
+            "WEB_GATEWAY_UPSTREAM_URL": "http://web-bridge:8080/lead",
+            "WEB_GATEWAY_MAX_BODY_BYTES": "1024", "WEB_GATEWAY_UPSTREAM_TIMEOUT_SECONDS": "1",
+            "WEB_GATEWAY_RATE_REQUESTS": "2", "WEB_GATEWAY_RATE_WINDOW_SECONDS": "10",
+            "WEB_GATEWAY_RATE_MAX_KEYS": "100", "WEB_BRIDGE_ABUSE_TOKEN": self.token,
+        }
+        self.assertEqual(self.module.GateConfig.from_env(base).allowed_origins, frozenset({"https://cliente.cl", "https://form.example:8443"}))
+        for value in ("", "*", "http://cliente.cl", "https://*.example", "https://user@cliente.cl", "https://cliente.cl/", "https://cliente.cl/path", "https://cliente.cl?q=1", "https://cliente.cl#x", "https://bad_host.cl", "https://cliente.cl:443", "https://cliente.cl:70000", "https://cliente.cl,", "https://cliente.cl, https://form.example", "https://cliente.cl,https://cliente.cl", "https://CLIENTE.cl", "https://cliente.cl\x00"):
+            with self.subTest(value=value), self.assertRaises(self.module.GateError):
+                self.module.GateConfig.from_env({**base, "WEB_GATEWAY_ALLOWED_ORIGINS": value})
+
     def test_rate_limit_is_effective_and_recovers_after_window(self):
         self.assertEqual(self.request()[0], 202)
         self.assertEqual(self.request()[0], 202)

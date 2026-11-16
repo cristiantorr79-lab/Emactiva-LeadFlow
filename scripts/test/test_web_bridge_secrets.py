@@ -144,6 +144,20 @@ class WebBridgeSecretTests(unittest.TestCase):
                     self.assertEqual(code, 1)
         provider.assert_not_called()
 
+    def test_secure_origins_are_portable_and_match_turnstile_hostnames(self):
+        class Provider:
+            def __init__(self, _identity, _timeout): pass
+            def resolve(self, reference): return SENSITIVE + reference.split("/")[3]
+        with tempfile.TemporaryDirectory() as temporary:
+            path = self.write_map(Path(temporary) / "map.json")
+            portable = {**self.base_env, "WEB_BRIDGE_ALLOWED_ORIGINS": "https://cliente.cl,https://form.example:8443", "WEB_BRIDGE_TURNSTILE_HOSTNAMES": "cliente.cl,form.example"}
+            code, _, _ = self.invoke(path, Provider, lambda command, **kwargs: mock.Mock(returncode=0), portable)
+            self.assertEqual(code, 0)
+            for origins, hostnames in (("https://cliente.cl", "other.example"), ("https://cliente.cl/", "cliente.cl"), ("https://cliente.cl:443", "cliente.cl"), ("https://cliente.cl,", "cliente.cl"), ("https://cliente.cl", "cliente.cl,"), ("https://cliente.cl", "cliente.cl, cliente.example"), ("https://cliente.cl", "cliente.cl,cliente.cl")):
+                with self.subTest(origins=origins):
+                    code, _, _ = self.invoke(path, Provider, env={**self.base_env, "WEB_BRIDGE_ALLOWED_ORIGINS": origins, "WEB_BRIDGE_TURNSTILE_HOSTNAMES": hostnames})
+                    self.assertEqual(code, 1)
+
     def test_secret_values_never_appear_in_process_arguments_or_output(self):
         class Provider:
             def __init__(self, _identity, _timeout): pass

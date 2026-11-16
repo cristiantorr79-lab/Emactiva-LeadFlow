@@ -61,7 +61,7 @@ class GateConfig:
             raise GateError("configuration_numeric") from error
         bind_host = values.get("WEB_GATEWAY_POLICY_BIND_HOST", "127.0.0.1").strip()
         public_path = values.get("WEB_GATEWAY_PUBLIC_PATH", "").strip()
-        origins = frozenset(item.strip() for item in values.get("WEB_GATEWAY_ALLOWED_ORIGINS", "").split(",") if item.strip())
+        origins = _parse_origins(values.get("WEB_GATEWAY_ALLOWED_ORIGINS", ""))
         abuse_token = values.get("WEB_BRIDGE_ABUSE_TOKEN", "")
         parsed = urlsplit(values.get("WEB_GATEWAY_UPSTREAM_URL", "").strip())
         if (
@@ -70,8 +70,6 @@ class GateConfig:
             or not 10 <= rate_max_keys <= 100000 or public_path != "/lead" or len(abuse_token) < 32
         ):
             raise GateError("configuration_bounds")
-        if not origins or any(not _valid_origin(item) for item in origins):
-            raise GateError("configuration_origin")
         if (
             parsed.scheme != "http" or not parsed.hostname or parsed.username or parsed.password
             or parsed.query or parsed.fragment or parsed.path != public_path
@@ -88,9 +86,39 @@ class GateConfig:
 
 
 def _valid_origin(value: str) -> bool:
-    parsed = urlsplit(value)
-    return bool(parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password
-                and not parsed.path.strip("/") and not parsed.query and not parsed.fragment)
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    host = parsed.hostname
+    if (
+        parsed.scheme != "https" or not host or host != host.lower()
+        or parsed.username is not None or parsed.password is not None
+        or parsed.path or parsed.query or parsed.fragment or "*" in value
+        or (port is not None and (not 1 <= port <= 65535 or port == 443))
+        or not _valid_hostname(host)
+    ):
+        return False
+    authority = host if port is None else f"{host}:{port}"
+    return value == f"https://{authority}"
+
+
+def _valid_hostname(value: str) -> bool:
+    if len(value) > 253 or value.endswith("."):
+        return False
+    labels = value.split(".")
+    return len(labels) >= 2 and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)
+
+
+def _parse_origins(raw: str) -> frozenset[str]:
+    items = raw.split(",")
+    if not raw or any(not item or item != item.strip() for item in items) or len(items) != len(set(items)):
+        raise GateError("configuration_origin")
+    origins = frozenset(items)
+    if any(not _valid_origin(item) for item in origins):
+        raise GateError("configuration_origin")
+    return origins
 
 
 class RateLimiter:

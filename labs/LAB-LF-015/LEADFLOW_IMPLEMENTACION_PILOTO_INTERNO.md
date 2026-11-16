@@ -2,6 +2,19 @@
 
 Documento específico de LF015-T02. No contiene secretos ni autoriza deployment.
 
+## Actualización LF015-T04 — 2026-11-16
+
+Esta actualización sustituye los estados de preparación históricos cuando existe evidencia posterior, sin borrar su trazabilidad. La implementación técnica del piloto evolucionó a un estado precomercial evaluado; **no está declarada COMMERCIAL READY** ni autoriza un nuevo envío productivo.
+
+- **D1:** `PASS CON WARN`; portabilidad de dominios y validación canónica están resueltas SYSTEM. Endpoint HTTPS por IP (H11), renovación automática TLS y validación ambiental siguen pendientes.
+- **D2:** cuatro manuales y anexos fueron elaborados en borrador fuera del repositorio. Su revisión, incorporación controlada y gate definitivo permanecen pendientes. El aprovisionador n8n Linux dispone de reconciliación SYSTEM, pero su ejecución real es `NOT_VERIFIED`.
+- **D3:** repositorio `pixel-perfect` renombrado a `Emactiva-Web`; Git local y Lovable reportados sincronizados en `C:\Users\DELL\Emactiva\Emactiva-Web`. Landing confirmada visualmente por el usuario. No se realizó un nuevo envío productivo en esta sesión.
+- **D4:** modalidad A: **$400.000 CLP netos**; modalidad B: **$1.200.000 CLP netos**. Derecho de uso sin cesión de propiedad intelectual, sujeto a formalización contractual y verificación de licencias. El presupuesto B de 40 horas, rentabilidad y capacidad operacional permanecen `NOT_VERIFIED`.
+- **Infraestructura:** costo GCP observado de los últimos 30 días: **$2.533 CLP**. Presupuesto mensual continuo provisional: **$30.000–$35.000 CLP**. Evaluar infraestructura alternativa queda fuera del alcance actual.
+- **Tiempo:** acumulado confirmado al cierre de la sesión anterior: **58 h 31 min**. Nueva sesión iniciada el **2026-11-16 13:42 CLT**, todavía abierta; no se inventa duración final.
+
+La matriz de aceptación y los límites SYSTEM/HYBRID/ENVIRONMENT vigentes están en `HANDOFF_LAB-LF-015.md`. Las tablas históricas siguientes describen el estado de T02 y no deben usarse aisladamente como estado actual.
+
 ## 1. Identificación y autoridad
 
 | Campo | Valor |

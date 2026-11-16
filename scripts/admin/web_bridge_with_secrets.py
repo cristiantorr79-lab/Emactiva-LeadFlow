@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,45 @@ OPERATION_ENV = {
 
 class WebBridgeSecretError(RuntimeError):
     pass
+
+
+def _valid_hostname(value: str) -> bool:
+    labels = value.split(".")
+    return len(value) <= 253 and not value.endswith(".") and len(labels) >= 2 and all(
+        re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels
+    )
+
+
+def _parse_secure_origins(raw: str) -> frozenset[str]:
+    items = raw.split(",")
+    if not raw or any(not item or item != item.strip() for item in items) or len(items) != len(set(items)):
+        raise WebBridgeSecretError("nonsecret configuration invalid")
+    for item in items:
+        try:
+            parsed, port = urlsplit(item), urlsplit(item).port
+        except ValueError as error:
+            raise WebBridgeSecretError("nonsecret configuration invalid") from error
+        host = parsed.hostname
+        authority = host if port is None else f"{host}:{port}"
+        if (
+            parsed.scheme != "https" or not host or host != host.lower()
+            or parsed.username is not None or parsed.password is not None
+            or parsed.path or parsed.query or parsed.fragment or "*" in item
+            or not _valid_hostname(host) or (port is not None and (not 1 <= port <= 65535 or port == 443))
+            or item != f"https://{authority}"
+        ):
+            raise WebBridgeSecretError("nonsecret configuration invalid")
+    return frozenset(items)
+
+
+def _parse_hostnames(raw: str) -> frozenset[str]:
+    items = raw.split(",")
+    if not raw or any(not item or item != item.strip() for item in items) or len(items) != len(set(items)):
+        raise WebBridgeSecretError("nonsecret configuration invalid")
+    hostnames = frozenset(items)
+    if any(not _valid_hostname(item) for item in hostnames):
+        raise WebBridgeSecretError("nonsecret configuration invalid")
+    return hostnames
 
 
 def load_secure_runtime():
@@ -102,6 +142,11 @@ def resolve_environment(map_path: Path, provider_factory=None) -> tuple[dict[str
         raise WebBridgeSecretError("compose project separation required")
     if any(not os.environ.get(name, "").strip() for name in REQUIRED_NONSECRET_NAMES):
         raise WebBridgeSecretError("nonsecret configuration incomplete")
+    if os.environ["WEB_BRIDGE_ENV"].strip().lower() in {"qa", "production"}:
+        origins = _parse_secure_origins(os.environ["WEB_BRIDGE_ALLOWED_ORIGINS"])
+        hostnames = _parse_hostnames(os.environ["WEB_BRIDGE_TURNSTILE_HOSTNAMES"])
+        if any(urlsplit(origin).hostname not in hostnames for origin in origins):
+            raise WebBridgeSecretError("nonsecret configuration invalid")
     if not NETWORK_RE.fullmatch(os.environ["WEB_BRIDGE_UPSTREAM_NETWORK"].strip()):
         raise WebBridgeSecretError("external network invalid")
     factory = provider_factory or secure_runtime.GcpSecretManagerProvider

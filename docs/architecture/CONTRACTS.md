@@ -44,6 +44,8 @@ LeadFlow deduplica de forma segura una reutilización del UUID aunque el conteni
 
 El puente llama al webhook interno con `X-LeadFlow-Key` obtenido únicamente de configuración del servidor. Su respuesta pública confirma solo aceptación genérica; nunca retransmite respuestas, identificadores, payloads o errores internos. En production exige origen HTTPS permitido y atestación secreta de un control externo de abuso. CORS/origen no son autenticación ni rate limiting, y la presencia de configuración no demuestra que la frontera HTTPS o el control externo estén operativos.
 
+Los orígenes públicos son portables y se configuran como una lista explícita separada por comas. Cada entrada debe ser un origen canónico completo `https://host[:puerto]`, sin espacios, comodines, credenciales, ruta, query, fragmento, NUL, hostname ambiguo ni puerto fuera de rango; no se admiten duplicados, segmentos vacíos ni el puerto predeterminado escrito explícitamente (`:443` para HTTPS y `:80` para HTTP local). Gateway y Bridge comparan el valor exacto de `Origin`. `WEB_GATEWAY_ALLOWED_ORIGINS` y `WEB_BRIDGE_ALLOWED_ORIGINS` deben contener el mismo conjunto, y cada hostname de ese conjunto debe estar incluido en `WEB_BRIDGE_TURNSTILE_HOSTNAMES`. Desarrollo puede autorizar explícitamente `http://localhost[:puerto-no-predeterminado]`; QA y production exigen HTTPS y Siteverify. Cambiar de cliente/dominio requiere actualizar conjuntamente esas tres variables y ejecutar ambos preflight antes de recrear servicios.
+
 ## Estados y etapas
 
 Estados: `received`, `processing`, `duplicate`, `retrying`, `success`, `failed`.

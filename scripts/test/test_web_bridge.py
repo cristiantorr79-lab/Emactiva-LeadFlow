@@ -401,6 +401,32 @@ class WebBridgeTests(unittest.TestCase):
         }
         self.assertEqual(self.bridge.BridgeConfig.from_env(development).environment, "development")
 
+    def test_origins_are_portable_canonical_and_match_turnstile_hosts(self):
+        portable = {
+            **self.env,
+            "WEB_BRIDGE_ALLOWED_ORIGINS": "https://cliente.cl,https://form.example:8443",
+            "WEB_BRIDGE_TURNSTILE_HOSTNAMES": "cliente.cl,form.example",
+        }
+        self.assertEqual(self.bridge.BridgeConfig.from_env(portable).allowed_origins, frozenset({"https://cliente.cl", "https://form.example:8443"}))
+        invalid = ("", "*", "http://cliente.cl", "https://*.example", "https://user@cliente.cl", "https://cliente.cl/", "https://cliente.cl/path", "https://cliente.cl?q=1", "https://cliente.cl#x", "https://bad_host.cl", "https://cliente.cl:443", "https://cliente.cl:70000", "https://cliente.cl,", "https://cliente.cl, https://form.example", "https://cliente.cl,https://cliente.cl", "https://CLIENTE.cl", "https://cliente.cl\x00")
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(self.bridge.BridgeError):
+                self.bridge.BridgeConfig.from_env({**self.env, "WEB_BRIDGE_ALLOWED_ORIGINS": value})
+        with self.assertRaises(self.bridge.BridgeError):
+            self.bridge.BridgeConfig.from_env({**self.env, "WEB_BRIDGE_ALLOWED_ORIGINS": "https://cliente.cl", "WEB_BRIDGE_TURNSTILE_HOSTNAMES": "other.example"})
+        for hostnames in ("cliente.cl, cliente.example", "cliente.cl,", "cliente.cl,cliente.cl", "CLIENTE.cl", "cliente_cl"):
+            with self.subTest(hostnames=hostnames), self.assertRaises(self.bridge.BridgeError):
+                self.bridge.BridgeConfig.from_env({**self.env, "WEB_BRIDGE_ALLOWED_ORIGINS": "https://cliente.cl", "WEB_BRIDGE_TURNSTILE_HOSTNAMES": hostnames})
+        development = {
+            **self.env, "WEB_BRIDGE_ENV": "development", "WEB_BRIDGE_ALLOWED_ORIGINS": "http://localhost:3000",
+            "WEB_BRIDGE_ABUSE_CONTROL": "disabled", "WEB_BRIDGE_ABUSE_TOKEN": "", "WEB_BRIDGE_TURNSTILE_MODE": "disabled",
+            "WEB_BRIDGE_TURNSTILE_SECRET_KEY": "", "WEB_BRIDGE_TURNSTILE_HOSTNAMES": "",
+        }
+        self.assertEqual(self.bridge.BridgeConfig.from_env(development).allowed_origins, frozenset({"http://localhost:3000"}))
+        for origin in ("http://localhost:80", "https://localhost:443"):
+            with self.subTest(origin=origin), self.assertRaises(self.bridge.BridgeError):
+                self.bridge.BridgeConfig.from_env({**development, "WEB_BRIDGE_ALLOWED_ORIGINS": origin})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

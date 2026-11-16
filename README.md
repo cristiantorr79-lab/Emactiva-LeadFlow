@@ -12,6 +12,8 @@ La solución usa n8n como orquestador y PostgreSQL como autoridad de persistenci
 
 El núcleo contiene reglas reutilizables; los adaptadores traducen contratos y errores de cada proveedor. Una interaction ambigua no se fuerza a fallo terminal: recovery conserva la ejecución original, reconcilia antes de repetir y no recrea contacto ni interaction a ciegas. HubSpot interaction real está validada mediante Tickets dentro del Adapter, con `leadflow_interaction_key` única para idempotencia y reconciliación; el Core sigue siendo CRM-agnostic. Production se configura mediante variables de entorno y validación fail-closed, sin almacenar secretos en Git.
 
+LAB-LF-015 consolidó una implementación precomercial evaluada con Gateway/Bridge, secretos administrados, backup/restore y controles DSR. LF015-T04 mantiene aceptación técnica con advertencias y **no declara COMMERCIAL READY**: endpoint HTTPS por IP, renovación TLS, recuperación ante pérdida total, alerta automática del Core, rotación, límites DSR, aprovisionamiento Linux real, reproducibilidad documental independiente y capacidad/rentabilidad conservan gates explícitos. Los manuales definitivos aún no forman parte del repositorio.
+
 ## Estado actual
 
 LAB-LF-007 cerró con evidencia real en una VM piloto: separación de roles PostgreSQL, portabilidad Linux, runtime saludable, rotación de credencial y smoke funcional. Esa evidencia no promueve controles ajenos al alcance del piloto ni sustituye la validación del deployment específico de cada cliente. LAB-LF-008 cerró el modelo EVENT + LEAD + INTERACTION, compatibilidad V1, idempotencia, recovery, privacidad, retención y DSR. LAB-LF-009 actualizó y aprobó la demo comercial. LAB-LF-010 está alineando la documentación y consolidación operativa/comercial, sin reabrir esos cierres.
@@ -20,6 +22,8 @@ LAB-LF-007 cerró con evidencia real en una VM piloto: separación de roles Post
 - [Contratos](docs/architecture/CONTRACTS.md)
 - [Setup y validación](docs/setup/SETUP.md)
 - [Backup y restore](docs/runbooks/BACKUP_RESTORE.md)
+- [Handoff vigente — LAB-LF-015](labs/LAB-LF-015/HANDOFF_LAB-LF-015.md)
+- [Ficha de implementación Emactiva — LAB-LF-015](labs/LAB-LF-015/LEADFLOW_IMPLEMENTACION_PILOTO_INTERNO.md)
 - [Playbook de implementación — LAB-LF-005](labs/LAB-LF-005/LEADFLOW_IMPLEMENTATION_PLAYBOOK.md)
 - [Runbook de deployment remoto — LAB-LF-006](labs/LAB-LF-006/LEADFLOW_REMOTE_DEPLOYMENT_RUNBOOK.md)
 - [Plantilla de implementación en cliente — LAB-LF-006](labs/LAB-LF-006/LEADFLOW_CLIENT_IMPLEMENTATION_TEMPLATE.md)

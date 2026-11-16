@@ -905,3 +905,83 @@ Estado de referencia: `main`/HEAD `930d50e`. Esta sección consolida la evidenci
 - **Gate recomendado para #17:** aceptar técnicamente como `PASS CON WARN`, registrar los riesgos anteriores y solicitar decisión humana de cierre; no ejecutar cierre automático ni interpretar la aceptación como autorización comercial.
 - **#18 / LF015-T04:** entrega operativa, monitoreo/alertas, runbooks de operación, ownership, capacitación, aceptación y autorización de exposición. No ejecutado en esta consolidación.
 - **LAB-LF-015 permanece ABIERTO.** La continuidad estratégica al finalizar el LAB es Event Normalization → LF005; no se inicia aquí.
+
+### LF015-T04 / D1.6 — remediación de portabilidad D1-H08 y D1-H10
+
+- **Causa SYSTEM:** `web_gateway_with_secrets.py` exigía literalmente `https://emactivaspa.lovable.app`. Rate Gate y Bridge aceptaban listas, pero su parsing toleraba representaciones no canónicas y el preflight seguro del Bridge no comprobaba coherencia con Turnstile.
+- **Corrección:** Gateway, Rate Gate, Bridge y cargador seguro del Bridge aceptan ahora uno o varios orígenes externos canónicos separados por comas, sin acoplamiento a cliente o proyecto Compose. Rechazan vacío, comodines, HTTP en QA/production, espacios/segmentos ambiguos, duplicados, credenciales, rutas, query, fragmentos, NUL, hostname inválido, mayúsculas no canónicas y puertos fuera de rango. Desarrollo conserva `http://localhost[:puerto]` explícito.
+- **Coherencia operativa:** `WEB_GATEWAY_ALLOWED_ORIGINS` y `WEB_BRIDGE_ALLOWED_ORIGINS` deben representar el mismo conjunto exacto. `WEB_BRIDGE_TURNSTILE_HOSTNAMES` debe cubrir cada hostname de los orígenes Bridge. El cambio de dominio actualiza las tres variables externas, verifica autorización del Site Key y ejecuta ambos preflight antes de redesplegar.
+- **PASS SYSTEM:** compilación Python de ocho archivos y 46/46 pruebas focalizadas de Gateway, Bridge y cargadores; después del endurecimiento final de la lista Turnstile, compilación y regresión Bridge/cargador 34/34 PASS. Cubren el origen Lovable vigente, dominios sintéticos `.cl`/`.example`, múltiples orígenes, CORS exacto, origen no autorizado, formas inválidas, coherencia Turnstile, autenticación/fail-closed y desarrollo localhost. No se usaron Docker, red, proveedores ni secretos; los servidores temporales de pruebas finalizaron normalmente.
+- **Clasificación:** D1-H08 y D1-H10 resueltos a nivel SYSTEM. **NOT_VERIFIED ENVIRONMENT:** configuración de un dominio alternativo, autorización real de su hostname Turnstile y preflight/redespliegue productivo. D1-H11 — endpoint HTTPS mediante IP pública— permanece independiente y pendiente; no se modifica TLS, DNS, Caddy ni exposición.
+- **Riesgo:** Gateway y Bridge son proyectos separados y no comparten configuración por diseño; la igualdad de allowlists se controla en el procedimiento de cambio y preflight de cada frontera, no mediante acoplamiento runtime. Un operador debe tratar cualquier divergencia como FAIL.
+- **Estado:** #18 y LAB-LF-015 continúan abiertos. No se autoriza despliegue ni tráfico comercial mediante esta remediación.
+
+### LF015-T04 / D1-H12 y D2-H01/H02/H03
+
+- **D1-H12 — PASS SYSTEM:** los cuatro validadores rechazan ahora puertos predeterminados explícitos (`:443` HTTPS y `:80` HTTP local), conservan puertos no predeterminados válidos y `http://localhost:<puerto-no-predeterminado>` en development. D1 queda `PASS CON WARN`: H08/H10/H12 están resueltos SYSTEM; H11 y la validación productiva continúan independientes `NOT_VERIFIED ENVIRONMENT`.
+- **D2-H01 — PASS SYSTEM:** nuevo `scripts/n8n/provision_n8n.py` para Linux. Reutiliza `LF015-SECRET-MAP-2`/`GcpSecretManagerProvider`, exige proyecto explícito, separa preflight/apply, bloquea instalaciones existentes sin autorización, importa credencial/workflow con IDs estables y publica solo con `--authorize-publish`. El secreto viaja por stdin a un temporal `0600` dentro de n8n con cleanup por `trap`; no aparece en argumentos/salidas. Inventario posterior e inventario activo reconcilian éxito; fallos ambiguos no generan reintento automático.
+- **D2-H02 — PASS DOCUMENTAL/SYSTEM:** `SETUP.md` consolida preparación de imágenes fijadas, proyectos/redes/volúmenes separados, orden de preflight, bootstrap/migraciones, arranque interno→externo, health y rollback conservador. Los comandos se dejan reproducibles para incorporarlos a M01 sin crear otra herramienta.
+- **D2-H03 — PASS DOCUMENTAL con límites:** se distinguen recursos observados en el piloto, mínimos obligatorios por destino, recomendaciones y controles `NOT_VERIFIED`. La evidencia del piloto no se extrapola a otro cliente o VM.
+- **QA focalizada:** compilación Python PASS; 52/52 pruebas de H12, Gateway/Bridge/cargadores y aprovisionador Linux PASS con secretos/proveedores simulados. Cubren autorizaciones, instalación nueva/existente/parcial, importación, publicación opt-in, idempotencia, error sanitizado y cleanup instalado. No hubo Docker, GCP, VM, red ni proveedores reales.
+- **NOT_VERIFIED ENVIRONMENT:** ejecución real del aprovisionador con n8n 2.28.6/Linux, CLI e inventario efectivo, Secret Manager/IAM, imágenes/digests, redes/volúmenes/capacidad y reconciliación de un fallo parcial real. El primer paso posterior es ejecutar solo preflight en un entorno Linux aislado con mapa externo y proyecto aprobado.
+- **Estado:** ticket #18 y LAB-LF-015 permanecen abiertos; no se elaboraron manuales definitivos ni se autorizó despliegue.
+
+### LF015-T04 / D2-H04 — reconciliación segura n8n
+
+- **Fallo SYSTEM corregido:** el aprovisionador anterior solo probaba IDs y reimportaba credencial/workflow juntos bajo una autorización genérica. No demostraba equivalencia, podía alterar un workflow activo y no reconciliaba un retorno ambiguo antes de repetir.
+- **Corrección:** preflight clasifica cada objeto como `absent/equivalent/divergent/ambiguous`. Workflow compara `id/name/settings/nodes/connections` y actividad; credencial compara `id/name/type/data` enteramente dentro del contenedor mediante temporales `0600` eliminados con `trap`. Los equivalentes no se importan; una instalación parcial importa solo lo ausente; cada reemplazo divergente y el reemplazo activo requieren autorizaciones específicas. Publicar continúa siendo opt-in.
+- **Resultados ambiguos:** tras fallo de importación/publicación se vuelve a inspeccionar. Si el estado esperado ya quedó demostrado, continúa sin repetir la mutación; en otro caso falla cerrado. Una CLI que no pueda exportar/comparar de forma concluyente produce FAIL, no equivalencia inventada.
+- **PASS SYSTEM:** compilación Python y 8/8 pruebas focalizadas. Cubren instalación nueva inactiva, existente equivalente inactiva/activa sin mutación, parcial, divergente, autorizaciones de reemplazo/publicación, inventario ambiguo, mutación de resultado ambiguo, sanitización y cleanup. Sin Docker, n8n, secretos ni proveedores reales.
+
+### LF015-T04 / D2-H05 — exportación individual de credencial n8n
+
+- **Fallo SYSTEM corregido:** la reconciliación H04 ejecutaba `export:credentials --all --decrypted`, exponiendo dentro del temporal credenciales ajenas a `leadflow-postgres`.
+- **Corrección:** el inventario usa exclusivamente la interfaz oficial `export:credentials --id=leadflow-postgres --decrypted`; no existe fallback masivo. Una exportación individual vacía se clasifica `absent`; una coincidencia única se clasifica `equivalent/divergent`; error, ID distinto, multiplicidad o formato inválido fallan cerrados. El `trap` se instala antes del primer `mktemp`, ambos archivos se fuerzan a `0600` y el cleanup cubre fallos parciales de creación.
+- **PASS SYSTEM:** la documentación oficial de la CLI confirma `export:credentials --id=<ID> --output=...`; compilación Python y 9/9 pruebas focalizadas del aprovisionador PASS. Verifican selección por ID, ausencia de `--all`, cuatro estados, error sanitizado, permisos y orden de cleanup. La ejecución efectiva y el comportamiento de ausencia sobre Linux/n8n 2.28.6 permanecen `NOT_VERIFIED ENVIRONMENT`.
+
+### LF015-T04 / consolidación D1–D4
+
+- **D1:** `PASS CON WARN`. H08/H10/H12 PASS SYSTEM; H11, renovación TLS y evidencia ambiental siguen pendientes.
+- **D2:** cuatro manuales/anexos existen como borradores fuera del repositorio. Incorporación, revisión independiente y gate definitivo pendientes. H01–H04 tienen implementación/evidencia SYSTEM; ejecución Linux real permanece `NOT_VERIFIED`.
+- **D3:** renombrado `pixel-perfect`→`Emactiva-Web` reportado completo; Git local/Lovable sincronizados y landing confirmada por el usuario en `C:\Users\DELL\Emactiva\Emactiva-Web`. No hubo nuevo envío productivo.
+- **D4:** modalidad A $400.000 CLP netos; modalidad B $1.200.000 CLP netos. Derecho de uso sin cesión de propiedad intelectual, sujeto a contrato y licencias. Las 40 horas de B, rentabilidad y capacidad operacional están `NOT_VERIFIED`. GCP observado 30 días: $2.533 CLP; presupuesto mensual provisional $30.000–$35.000 CLP. Infraestructura alternativa queda fuera de alcance.
+- **Tiempo:** 58 h 31 min confirmadas hasta la sesión anterior. Sesión nueva iniciada `2026-11-16 13:42 CLT`, abierta.
+
+### D5 — matriz de aceptación
+
+| Área | Capa/responsable | Estado | Evidencia y límite |
+|---|---|---|---|
+| Implementación técnica D1 | SYSTEM — implementación Emactiva | ACEPTADO CON WARN | Portabilidad/validación PASS; H11 y renovación TLS son ENVIRONMENT pendientes. |
+| Aprovisionamiento y operación D2 | SYSTEM/HYBRID — implementación + operador | ACEPTADO CON WARN | Reconciliación y procedimientos PASS SYSTEM; Linux real, manuales incorporados y reproducción independiente pendientes. |
+| Web/identidad D3 | HYBRID — responsable web + usuario | ACEPTADO CON WARN | Renombrado/sincronización/visual confirmados por reporte; sin nuevo envío productivo ni verificación desde este repositorio. |
+| Oferta y propiedad intelectual D4 | HYBRID — Emactiva + contraparte contractual | ACEPTADO CON WARN | Valores definidos; contrato, licencias, 40 h, rentabilidad y capacidad no verificados. |
+| Seguridad, privacidad y DSR | SYSTEM/HYBRID/ENVIRONMENT — implementación + privacidad + proveedores | ACEPTADO CON WARN | Controles técnicos demostrados; rotación, RESTRICT externo, borrado físico/retención y replay no vacío conservan límites. |
+| Resiliencia y operación sostenida | HYBRID/ENVIRONMENT — infraestructura/operación | NO ACEPTADO | Falta recuperación ante pérdida completa, RTO continuo, renovación TLS y ejecución real del aprovisionador. |
+| Alertas y respuesta | SYSTEM/ENVIRONMENT — Core/operación | NO ACEPTADO | Slack directo fue probado; alerta automática ante fallo real del Core sigue NOT_VERIFIED. |
+| Preparación comercial global | HYBRID/ENVIRONMENT — dirección/cliente/operación | NO ACEPTADO | Reproducibilidad documental, rentabilidad, capacidad y autorización operacional obligatoria son insuficientes. **No COMMERCIAL READY.** |
+
+**Responsabilidades:** SYSTEM conserva código, pruebas, validadores y fail-closed; HYBRID requiere revisión/aceptación de manuales, contratos, licencias, privacidad y operación; ENVIRONMENT requiere operador autorizado para Linux/GCP, secretos, TLS, restore, monitoreo y evidencia real. Un PASS SYSTEM no promociona automáticamente los otros niveles.
+
+**Pendientes preservados:** H11; renovación automática TLS; pérdida completa de infraestructura; Slack automático desde fallo del Core; rotación de secretos; límites DSR externos; ejecución Linux real; reproducibilidad documental independiente; rentabilidad y capacidad operacional.
+
+**Dictamen D5:** paquete técnico `ACEPTADO CON WARN`; resiliencia/operación sostenida y preparación comercial `NO ACEPTADO`. Ticket #18 y LAB-LF-015 continúan abiertos; no se ejecuta cierre ni se declara COMMERCIAL READY.
+
+### LF015-T04 / D6 - Consolidacion documental y gate final
+
+- D2: cinco documentos oficiales v1.0 incorporados a docs/manuals, con fuentes Markdown y PDF:
+  - M01_INSTALLATION
+  - M02_OPERATIONS
+  - M03_BACKUP_RECOVERY
+  - M04_USER_GUIDE
+  - A01_IMPLEMENTATION_ACCEPTANCE
+- Documentacion consolidada con evidencia historica, correcciones H12/H04/H05 y logotipo corporativo vigente.
+- QA documental interno PASS. Reproduccion independiente EDPB-T09 NOT_VERIFIED.
+- D3: renombrado remoto/local y sincronizacion Lovable confirmados. Landing validada visualmente por el responsable.
+- QA Git: 14 archivos modificados y 12 nuevos antes de esta consolidacion. Comprobacion de whitespace PASS. Avisos LF/CRLF informativos.
+- Se preservan los PASS historicos y los riesgos residuales registrados en D5.
+- Paquete tecnico: ACEPTADO CON WARN.
+- Resiliencia integral, operacion sostenida y preparacion comercial: NO ACEPTADO.
+- No se autoriza exposicion comercial, uso de datos reales ni despliegue adicional.
+- Ejecuciones Codex acumuladas durante LF015-T04: 4.
+- Commit/push y cierre de issues pendientes de autorizacion.
+- LAB-LF-015 permanece ABIERTO hasta la decision final del responsable.

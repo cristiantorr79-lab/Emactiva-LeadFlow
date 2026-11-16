@@ -48,8 +48,20 @@ class GatewayProductionTests(unittest.TestCase):
   self.assertTrue(all("leadflow-gateway" in call[0] and "compose.web-gateway.production.yaml" in " ".join(call[0]) and "compose.yaml" not in call[0] for call in calls))
   self.assertNotIn("synthetic-abuse-token",str(calls[0][0]))
 
- def test_invalid_map_projects_origin_and_private_ip_fail_closed(self):
-  for key,value in (("WEB_GATEWAY_COMPOSE_PROJECT","emactiva-leadflow"),("WEB_GATEWAY_ALLOWED_ORIGINS","https://evil.invalid"),("WEB_GATEWAY_PUBLIC_IP","10.0.0.2")):
+ def test_origins_are_portable_canonical_and_fail_closed(self):
+  for origins in ("https://emactivaspa.lovable.app","https://cliente.cl","https://form.example,https://otro.example:8443"):
+   with self.subTest(origins=origins),patch.dict(os.environ,{**self.env,"WEB_GATEWAY_ALLOWED_ORIGINS":origins},clear=True):
+    resolved,_=self.runtime.resolve_environment(self.map,Provider)
+    self.assertEqual(resolved["WEB_GATEWAY_ALLOWED_ORIGINS"],origins)
+  invalid=("","*","https://*.example","http://form.example","https://user@form.example","https://form.example/","https://form.example/path","https://form.example?q=1","https://form.example#x","https://form_example","https://form.example:0","https://form.example:443","https://form.example:70000","https://form.example,","https://form.example, https://other.example","https://form.example,https://form.example","https://FORM.example")
+  for origins in invalid:
+   with self.subTest(origins=origins),patch.dict(os.environ,{**self.env,"WEB_GATEWAY_ALLOWED_ORIGINS":origins},clear=True),self.assertRaises(self.runtime.WebGatewaySecretError):
+    self.runtime.resolve_environment(self.map,Provider)
+  with self.assertRaises(self.runtime.WebGatewaySecretError):
+   self.runtime.parse_origins("https://form.example\x00")
+
+ def test_invalid_map_projects_and_private_ip_fail_closed(self):
+  for key,value in (("WEB_GATEWAY_COMPOSE_PROJECT","emactiva-leadflow"),("WEB_GATEWAY_PUBLIC_IP","10.0.0.2")):
    with self.subTest(key=key),patch.dict(os.environ,{**self.env,key:value},clear=True),self.assertRaises(self.runtime.WebGatewaySecretError):
     self.runtime.resolve_environment(self.map,Provider)
 
